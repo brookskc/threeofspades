@@ -37,6 +37,7 @@ export class Bot {
     this.wander = new THREE.Vector3();
     this.wanderT = 0;
     this.digT = 0;             // tunneling swing cooldown
+    this.lastDig = -9;         // last shovel swing, game time
     this.responding = false;   // rushing to recover our dropped flag?
     this.deadT = -1;           // corpse tumble timer, while dead
   }
@@ -103,29 +104,54 @@ export class Bot {
       dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
     }
 
+    // --- terrain negotiation: tunnel level, stair-step uphill, hop steps ---
+    // The passage ahead is two voxels high at foot level; whatever of it is
+    // solid gets shovelled, one swing every 0.32s, feet planted (airborne
+    // swings gouge random heights). A full wall with the goal uphill and open
+    // sky becomes a staircase: clear a ledge above the step, hop on, repeat —
+    // that climbs out of any pit. Anything else is tunnelled through level.
+    // While the shovel is swinging the bot holds a digger's pace so it never
+    // bumps the wall between swings (that bump used to trigger the stuck-hop,
+    // pop it onto the ridge crest, and abandon the tunnel).
+    this.digT -= dt;
+    const w = g.world, fy = Math.floor(b.pos.y);
+    // Probe the contact column first, then a step beyond: a bot pressed
+    // against the face is closer than shovel reach, and both columns block.
+    let tx = 0, tz = 0, lo = false, hi = false;
+    for (const reach of [0.9, 1.5]) {
+      const px = Math.floor(b.pos.x + dir.x * reach);
+      const pz = Math.floor(b.pos.z + dir.z * reach);
+      lo = w.solid(px, fy, pz); hi = w.solid(px, fy + 1, pz);
+      if (lo || hi) { tx = px; tz = pz; break; }
+      lo = hi = false;
+    }
+    if (!this.target && dist > 2 && this.digT <= 0 && hi && b.onGround) {
+      this.digT = 0.32;
+      this.lastDig = g.time;
+      const uphill = goal.y - b.pos.y > 1.5;
+      const ceiling = w.solid(Math.floor(b.pos.x), fy + 2, Math.floor(b.pos.z));
+      if (lo && uphill && !ceiling) {
+        this._digV(tx, fy + 1, tz); this._digV(tx, fy + 2, tz); // ledge, then hop on
+        b.jump();
+      } else {
+        this._digV(tx, fy, tz); this._digV(tx, fy + 1, tz);     // wall face or lip
+      }
+    }
+    const digging = g.time - this.lastDig < 0.9;
+
     const speed = b.inWater ? 2.6
       : this.target ? 3.4
+      : digging ? 2.2           // shovel pace: never outrun the swing
       : this.responding ? 5.8   // urgency: our flag is on the ground
       : 4.6;
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
 
-    // Tunnel through ridges instead of detouring around them: a two-high
-    // wall dead ahead gets shovelled, one swing every 0.35s.
-    this.digT -= dt;
-    if (!this.target && dist > 2 && this.digT <= 0) {
-      const ax = Math.floor(b.pos.x + dir.x * 1.5);
-      const az = Math.floor(b.pos.z + dir.z * 1.5);
-      const fy = Math.floor(b.pos.y);
-      if (g.world.solid(ax, fy, az) && g.world.solid(ax, fy + 1, az)) {
-        this.digT = 0.35;
-        this._dig(dir);
-      }
-    }
-
-    // Stuck detection: sample displacement every 0.4s — hop, then dig through
-    // whatever is in the way. (Per-frame thresholds lie: a full-speed bot only
-    // moves ~0.08 vox a frame, so any fixed per-frame cutoff reads as "stuck".)
+    // Stuck detection: sample displacement every 0.4s — hop over one-high
+    // steps, sidestep when truly wedged. Suppressed mid-dig: a tunneler at
+    // the face is making progress even while momentarily pressed still.
+    // (Per-frame thresholds lie: a full-speed bot only moves ~0.08 vox a
+    // frame, so any fixed per-frame cutoff reads as "stuck".)
     this.sampleT -= dt;
     if (this.sampleT <= 0) {
       this.sampleT = 0.4;
@@ -133,8 +159,12 @@ export class Bot {
       this.stuck = moved < 0.5 && dist > 2 ? this.stuck + 1 : 0;
       this.lastPos.copy(b.pos);
     }
-    if (this.stuck >= 1) b.jump();
-    if (this.stuck >= 3) { this._dig(dir); this.stuck = 1; }
+    if (this.stuck >= 1 && !(digging && hi)) b.jump();
+    if (this.stuck >= 4) { // wedged on something unshovelled — sidestep
+      this.wander.set((Math.random() - .5) * 30, 0, (Math.random() - .5) * 30);
+      this.wanderT = 2;
+      this.stuck = 0;
+    }
 
     b.move(dt);
 
@@ -184,12 +214,9 @@ export class Bot {
     return best;
   }
 
-  _dig(dir) {
-    // Shovel out the voxel blocking the path at foot and head height.
-    const fx = Math.floor(this.body.pos.x + dir.x * 1.4);
-    const fz = Math.floor(this.body.pos.z + dir.z * 1.4);
-    for (const fy of [Math.floor(this.body.pos.y), Math.floor(this.body.pos.y) + 1])
-      if (this.game.world.solid(fx, fy, fz)) this.game.digVoxel(this, fx, fy, fz);
+  // Shovel a single voxel (debris, edit log, network sync all handled inside).
+  _digV(x, y, z) {
+    if (this.game.world.solid(x, y, z)) this.game.digVoxel(this, x, y, z);
   }
 
   die(killer) {
@@ -208,6 +235,8 @@ export class Bot {
     this.ammo = GUN.mag;
     this.stuck = 0;
     this.sampleT = 0.4;
+    this.digT = 0;
+    this.lastDig = -9;
     this.lastPos.copy(this.body.pos);
     this.deadT = -1;
     resetDeath(this.parts);

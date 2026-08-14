@@ -526,15 +526,16 @@ export class Game {
   }
 
   _explode(g) {
-    this.explodeAt(g.pos.x, g.pos.y, g.pos.z, 3.6);
+    const R = 2.4; // a modest divot: grenades maim players, not landscapes
+    this.explodeAt(g.pos.x, g.pos.y, g.pos.z, R);
     if (this.mode === 'host') {
-      this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, 3.6]);
-      this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: 3.6 });
+      this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, R]);
+      this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: R });
     }
     for (const e of this.entities()) {
       if (!e.alive) continue;
       const d = g.pos.distanceTo(e.body.eye());
-      if (d < 6.5) this.damage(e, Math.max(10, 85 * (1 - d / 6.5)), g.owner);
+      if (d < 7) this.damage(e, Math.max(15, 130 * (1 - d / 7)), g.owner);
     }
   }
 
