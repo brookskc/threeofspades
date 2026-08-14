@@ -46,9 +46,16 @@ export class Bot {
     this.responding = false;
     if (this.carrier) return g.flags[this.team].standPos();          // run it home
     const own = g.flags[this.team];
-    // Our flag is on the ground — the two closest free bots sprint back for it.
-    this.responding = own.state === 'dropped' && this._isResponder(own.pos);
-    if (this.responding) return own.pos;
+    // Flag defense: the two closest free bots drop everything — sprint at the
+    // thief while it's carried, converge on the flag while it's on the ground.
+    if (own.state === 'carried' && own.carrier) {
+      this.responding = this._isResponder(own.carrier.body.pos);
+      if (this.responding) return own.carrier.body.pos;              // hunt the thief
+    }
+    if (own.state === 'dropped') {
+      this.responding = this._isResponder(own.pos);
+      if (this.responding) return own.pos;
+    }
     const enemyFlag = g.flags[g.enemyOf(this.team)];
     if (enemyFlag.state === 'dropped') return enemyFlag.pos;         // grab the loose flag
     return enemyFlag.standPos();                                     // storm their base
@@ -158,6 +165,13 @@ export class Bot {
   }
 
   _acquire() {
+    // A designated defender tunnel-visions the flag thief, even from afar.
+    const own = this.game.flags[this.team];
+    if (this.responding && own.state === 'carried' && own.carrier?.alive) {
+      const c = own.carrier;
+      if (this.body.pos.distanceTo(c.body.pos) < 64 &&
+          this.game.losClear(this.body.eye(), c.body.eye())) return c;
+    }
     const foes = this.game.foesOf(this.team);
     let best = null, bestD = 48;
     for (const f of foes) {
