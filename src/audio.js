@@ -9,11 +9,14 @@ export function initAudio() {
   master.connect(ctx.destination);
 }
 
+// One shared noise buffer — allocating per gunshot was the main source of GC churn.
+let _noise = null;
 function noiseBuffer() {
+  if (_noise) return _noise;
   const buf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
   const d = buf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-  return buf;
+  return (_noise = buf);
 }
 
 // Filtered noise burst — the backbone of gunshots, digs, explosions.

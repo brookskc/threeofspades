@@ -19,13 +19,16 @@ export const BLOCK = { GRASS: 1, DIRT: 2, SAND: 3, STONE: 4, BLUE: 5, GREEN: 6 }
 
 // Classic per-face shading baked into vertex colors — crisp, flat, cheap.
 const FACE_SHADE = [0.72, 0.72, 0.45, 1.0, 0.84, 0.84]; // -x +x -y +y -z +z
+// Corner order matters: with indices (0,1,2),(2,1,3) the triangles must wind
+// counter-clockwise seen from OUTSIDE, or the face is backface-culled and the
+// terrain shows sky-holes when viewed along ±z.
 const FACES = [
   { dir: [-1, 0, 0], corners: [[0,1,0],[0,0,0],[0,1,1],[0,0,1]] },
   { dir: [ 1, 0, 0], corners: [[1,1,1],[1,0,1],[1,1,0],[1,0,0]] },
   { dir: [ 0,-1, 0], corners: [[1,0,1],[0,0,1],[1,0,0],[0,0,0]] },
   { dir: [ 0, 1, 0], corners: [[0,1,1],[1,1,1],[0,1,0],[1,1,0]] },
-  { dir: [ 0, 0,-1], corners: [[1,1,0],[0,1,0],[1,0,0],[0,0,0]] },
-  { dir: [ 0, 0, 1], corners: [[0,1,1],[1,1,1],[0,0,1],[1,0,1]] },
+  { dir: [ 0, 0,-1], corners: [[0,1,0],[1,1,0],[0,0,0],[1,0,0]] },
+  { dir: [ 0, 0, 1], corners: [[1,1,1],[0,1,1],[1,0,1],[0,0,1]] },
 ];
 
 const idx = (x, y, z) => (y * SZ + z) * SX + x;
@@ -152,7 +155,7 @@ export class VoxelWorld {
     for (let y = cy - R; y <= cy + R; y++)
       for (let z = cz - R; z <= cz + R; z++)
         for (let x = cx - R; x <= cx + R; x++) {
-          const d = Math.hypot(x - cx, y - cy, z - cz);
+          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy, z + 0.5 - cz);
           if (d > r || !this.get(x, y, z)) continue;
           removed.push({ x, y, z, v: this.get(x, y, z) });
           this.data[idx(x, y, z)] = 0;
@@ -176,6 +179,17 @@ export class VoxelWorld {
   surface(x, z) {
     for (let y = SY - 1; y >= 0; y--) if (this.solid(x, y, z)) return y;
     return 0;
+  }
+
+  // Release everything this world holds on the GPU (map rebuilds).
+  dispose() {
+    for (const m of this.chunks.values()) m.geometry.dispose();
+    this.chunks.clear();
+    this.group.removeFromParent();
+    this.water.removeFromParent();
+    this.water.geometry.dispose();
+    this.water.material.dispose();
+    this.material.dispose();
   }
 
   animateWater(t) {

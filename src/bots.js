@@ -8,12 +8,14 @@ const NAMES = {
 };
 const GUN = { damage: 16, headMult: 1.5, interval: 0.14, spread: 0.035, mag: 24, reload: 2.0 };
 
-let n = 0;
+let n = 0;        // name rotation
+let nextId = 0;   // stable identity for network snapshots
 
 export class Bot {
   constructor(game, team) {
     this.game = game;
     this.team = team;
+    this.id = nextId++;
     this.name = NAMES[team][n++ % NAMES[team].length];
     const p = game.spawnPoint(team);
     this.body = new Body(game.world, p.x, p.y, p.z);
@@ -29,7 +31,8 @@ export class Bot {
     this.cooldown = Math.random();
     this.ammo = GUN.mag;
     this.reloading = 0;
-    this.stuck = 0;
+    this.stuck = 0;            // consecutive motionless samples
+    this.sampleT = 0.4;        // displacement sampling timer
     this.lastPos = this.body.pos.clone();
     this.wander = new THREE.Vector3();
     this.wanderT = 0;
@@ -74,12 +77,18 @@ export class Bot {
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
 
-    // Stuck detection → hop, then dig through whatever is in the way.
-    if (b.pos.distanceToSquared(this.lastPos) < 0.02 * dt * 60 && dist > 2) this.stuck += dt;
-    else this.stuck = Math.max(0, this.stuck - dt);
-    this.lastPos.copy(b.pos);
-    if (this.stuck > 0.35) b.jump();
-    if (this.stuck > 1.4) { this._dig(dir); this.stuck = 0.6; }
+    // Stuck detection: sample displacement every 0.4s — hop, then dig through
+    // whatever is in the way. (Per-frame thresholds lie: a full-speed bot only
+    // moves ~0.08 vox a frame, so any fixed per-frame cutoff reads as "stuck".)
+    this.sampleT -= dt;
+    if (this.sampleT <= 0) {
+      this.sampleT = 0.4;
+      const moved = b.pos.distanceTo(this.lastPos);
+      this.stuck = moved < 0.5 && dist > 2 ? this.stuck + 1 : 0;
+      this.lastPos.copy(b.pos);
+    }
+    if (this.stuck >= 1) b.jump();
+    if (this.stuck >= 3) { this._dig(dir); this.stuck = 1; }
 
     b.move(dt);
 
@@ -144,6 +153,9 @@ export class Bot {
     this.health = 100;
     this.alive = true;
     this.ammo = GUN.mag;
+    this.stuck = 0;
+    this.sampleT = 0.4;
+    this.lastPos.copy(this.body.pos);
     this.parts.group.visible = true;
   }
 }

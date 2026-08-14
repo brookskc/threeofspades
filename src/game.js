@@ -7,7 +7,7 @@ import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
 import { Effects } from './effects.js';
 import { sfx } from './audio.js';
-import { Body } from './entities.js';
+import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
@@ -46,6 +46,8 @@ class Flag {
   }
 
   standPos() { return this.home.clone(); }
+
+  dispose() { disposeObject(this.group); }
 
   drop(at) {
     this.state = 'dropped';
@@ -221,10 +223,7 @@ export class Game {
     this.hud = hud;
 
     this.bots = [];
-    if (this.mode !== 'client') {
-      for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
-      for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
-    }
+    if (this.mode !== 'client') this._spawnBots();
 
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.captures = { green: 0, blue: 0 };
@@ -243,22 +242,29 @@ export class Game {
 
   // Tear down and regenerate on a new seed (host room start / client welcome).
   rebuild(seed) {
-    this.scene.remove(this.world.group, this.world.water);
-    for (const b of this.bots) this.scene.remove(b.parts.group);
-    for (const t of ['green', 'blue']) this.scene.remove(this.flags[t].group);
+    this.world.dispose();
+    for (const b of this.bots) disposeObject(b.parts.group);
+    for (const t of ['green', 'blue']) this.flags[t].dispose();
     this.seed = seed;
     this.world = new VoxelWorld(this.scene);
     generateMap(this.world, seed);
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
-    if (this.mode !== 'client') {
-      this.bots = [];
-      for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
-      for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
-    }
+    this.bots = [];
+    if (this.mode !== 'client') this._spawnBots();
     this.captures = { green: 0, blue: 0 };
     this.editLog = [];
+    this.grenades = [];
+    this.grenadeMesh.visible = false;
+    this.respawnTimers.clear();
+    this.over = false;
+    this._lastHealth = 100;
     this.player.respawn();
     hud.score(this);
+  }
+
+  _spawnBots() {
+    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
+    for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
   }
 
   enemyOf(team) { return team === 'blue' ? 'green' : 'blue'; }
@@ -552,8 +558,8 @@ export class Game {
         enemyFlag.returnHome();
         sfx.capture();
         this.feed(`${nameSpan(e)} <b>CAPTURED</b> the flag`);
-        this.message(e.team === 'green' ? 'CAPTURE! GREEN SCORES' : 'BLUE SCORES',
-          e.team === 'green' ? '#8fd98f' : '#e74c3c');
+        this.message(e.team === 'green' ? 'CAPTURE! GREEN SCORES' : 'CAPTURE! BLUE SCORES',
+          e.team === 'green' ? '#8fd98f' : '#8fa8ee');
         hud.score(this);
         if (this.captures[e.team] >= WIN_SCORE) this._end(e.team);
       }
@@ -587,10 +593,16 @@ export class Game {
     if (d.t === 's') {
       p.body.pos.set(d.x, d.y, d.z);
       p.tool = d.tool;
+      p.yaw = d.yaw;
       p.avatar.push(d.x, d.y, d.z, d.yaw);
     } else if (d.t === 'a' && p.alive && !this.over) {
       const o = v3(d.o), dir = v3(d.d).normalize();
-      if (d.k === 'shoot') this.fireHitscan(p, o, dir, TOOLS[d.tool] ?? TOOLS[0]);
+      // Sanity: actions must originate near the proxy's known position.
+      if (o.distanceToSquared(p.body.eye()) > 25) return;
+      if (d.k === 'shoot') {
+        const spec = TOOLS[d.tool];
+        if (spec?.damage) this.fireHitscan(p, o, dir, spec);
+      }
       else if (d.k === 'dig') this.playerDig(p, o, dir);
       else if (d.k === 'place') this.playerPlace(p, o, dir);
       else if (d.k === 'nade') this.throwGrenade(p, o, dir, 13);
@@ -617,7 +629,7 @@ export class Game {
       this.flags[this.enemyOf(p.team)].drop(p.body.pos.clone());
     }
     this.feed(`${nameSpan(p)} left the battle`);
-    p.avatar.dispose(this.scene);
+    p.avatar.dispose();
     this.remote.delete(id);
     this.respawnTimers.delete(p);
     if (!this.over) this.bots.push(new Bot(this, p.team));
@@ -627,7 +639,7 @@ export class Game {
     const i = this.bots.findIndex(b => b.team === team);
     if (i < 0) return;
     const [b] = this.bots.splice(i, 1);
-    this.scene.remove(b.parts.group);
+    disposeObject(b.parts.group);
     this.respawnTimers.delete(b);
   }
 
@@ -642,7 +654,7 @@ export class Game {
     return {
       t: 's',
       p: P,
-      b: this.bots.map(b => [b.name, b.team, ...arr(b.body.pos),
+      b: this.bots.map(b => [b.id, b.name, b.team, ...arr(b.body.pos),
         b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0]),
       f: {
         g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
@@ -670,6 +682,7 @@ export class Game {
   }
 
   _clientSnapshot(d) {
+    const seen = new Set();
     for (const e of d.p) {
       const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks] = e;
       if (id === this.myId) {
@@ -683,22 +696,23 @@ export class Game {
         if (this.player.tool === 3) hud.refreshTool(this.player);
         continue;
       }
+      seen.add(id);
       let av = this.avatars.get(id);
       if (!av) { av = new Avatar(this.scene, team, name); this.avatars.set(id, av); }
       av.alive = !!alive;
       av.push(x, y, z, ry);
     }
-    const seen = new Set();
-    d.b.forEach((b, i) => {
-      const key = 'b' + i;
+    for (const b of d.b) {
+      const key = 'b' + b[0];
       seen.add(key);
       let av = this.avatars.get(key);
-      if (!av) { av = new Avatar(this.scene, b[1], b[0]); this.avatars.set(key, av); }
-      av.alive = !!b[6];
-      av.push(b[2], b[3], b[4], b[5]);
-    });
+      if (!av) { av = new Avatar(this.scene, b[2], b[1]); this.avatars.set(key, av); }
+      av.alive = !!b[7];
+      av.push(b[3], b[4], b[5], b[6]);
+    }
+    // Anything not in this snapshot is gone (left the room / bot swapped out).
     for (const [key, av] of this.avatars) {
-      if (key.startsWith('b') && !seen.has(key)) { av.alive = false; av.group.visible = false; }
+      if (!seen.has(key)) { av.dispose(); this.avatars.delete(key); }
     }
     const stateName = ['home', 'carried', 'dropped'];
     for (const team of ['green', 'blue']) {
@@ -758,13 +772,17 @@ export class Game {
     const g0 = this._lastGrenades?.[0];
     this.grenadeMesh.visible = !!g0;
     if (g0) this.grenadeMesh.position.set(g0[0], g0[1], g0[2]);
-    if (this.effects.shake > 0.001) {
-      const s = this.effects.shake;
-      this.camera.position.x += (Math.random() - .5) * s * 0.4;
-      this.camera.position.y += (Math.random() - .5) * s * 0.4;
-      this.camera.rotation.z = (Math.random() - .5) * s * 0.05;
-    }
+    this._shakeCamera();
     this.effects.update(dt);
+  }
+
+  // Camera shake rides on top of whatever the player camera did.
+  _shakeCamera() {
+    if (this.effects.shake <= 0.001) return;
+    const s = this.effects.shake;
+    this.camera.position.x += (Math.random() - .5) * s * 0.4;
+    this.camera.position.y += (Math.random() - .5) * s * 0.4;
+    this.camera.rotation.z = (Math.random() - .5) * s * 0.05;
   }
 
   // ---------------- main tick ----------------
@@ -807,12 +825,7 @@ export class Game {
     }
 
     // Camera shake rides on top of whatever the player camera did.
-    if (this.effects.shake > 0.001) {
-      const s = this.effects.shake;
-      this.camera.position.x += (Math.random() - .5) * s * 0.4;
-      this.camera.position.y += (Math.random() - .5) * s * 0.4;
-      this.camera.rotation.z = (Math.random() - .5) * s * 0.05;
-    }
+    this._shakeCamera();
     this.effects.update(dt);
   }
 }

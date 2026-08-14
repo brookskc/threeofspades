@@ -98,3 +98,15 @@ export function animateSoldier(parts, speed, t) {
   parts.armL.rotation.x = -s * 0.8;
   parts.armR.rotation.x = s * 0.8;
 }
+
+// Remove an object from its parent and release all GPU resources below it.
+export function disposeObject(root) {
+  root.removeFromParent();
+  root.traverse(o => {
+    o.geometry?.dispose();
+    if (o.material) {
+      o.material.map?.dispose();
+      o.material.dispose();
+    }
+  });
+}

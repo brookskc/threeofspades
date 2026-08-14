@@ -1,6 +1,6 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
-import { makeSoldier, animateSoldier } from './entities.js';
+import { makeSoldier, animateSoldier, disposeObject } from './entities.js';
 
 function makeNameSprite(name, team) {
   const c = document.createElement('canvas');
@@ -64,5 +64,5 @@ export class Avatar {
     animateSoldier(this.parts, speed, gameT + this.pos.x);
   }
 
-  dispose(parent) { parent.remove(this.group); }
+  dispose() { disposeObject(this.group); }
 }

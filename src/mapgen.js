@@ -45,6 +45,12 @@ export function generateMap(world, seed = 1979) {
                        + 0.15 * noise(x * 0.11,  z * 0.11));
       // Rolling central ridge gives the midfield some cover.
       h += island * 5 * noise(x * 0.008 + 40, z * 0.008 + 9);
+      // Clean shorelines: steepen the waterline crossing so few columns
+      // straddle the sea plane (kills the speckled-shallows moiré).
+      if (h > SEA - 2 && h < SEA + 2) {
+        const t = (h - (SEA - 2)) / 4;
+        h = SEA - 2 + 4 * t * t * (3 - 2 * t);
+      }
       height[z * SX + x] = Math.min(SY - 8, h);
     }
 
@@ -61,14 +67,19 @@ export function generateMap(world, seed = 1979) {
         }
       }
   }
-  for (let x = BASE.green.x; x <= BASE.blue.x; x++)
-    for (let dz = -4; dz <= 4; dz++) {
-      const z = Math.round(SZ / 2 + dz + 8 * Math.sin(x * 0.05));
+  // A gentle road between the bases — pulled toward its target height in both
+  // directions: causeway over water, soft valley through hills, wide smooth
+  // shoulders. (Hard clamping used to leave picket-fence cliffs along the edge.)
+  for (let x = BASE.green.x; x <= BASE.blue.x; x++) {
+    const rz = SZ / 2 + 8 * Math.sin(x * 0.05);
+    const target = SEA + 3 + 3 * noise(x * 0.02, 7);
+    for (let z = Math.floor(rz - 12); z <= Math.ceil(rz + 12); z++) {
       if (z < 1 || z >= SZ - 1) continue;
+      const t = Math.min(1, Math.max(0, (Math.abs(z - rz) - 4) / 8)); // 0 roadbed → 1 off-road
       const i = z * SX + x;
-      const target = SEA + 3 + 3 * noise(x * 0.02, 7);
-      height[i] = Math.min(height[i], target + Math.abs(dz) * 0.8);
+      height[i] = height[i] * t + target * (1 - t);
     }
+  }
 
   // Fill columns: grass cap, dirt, stone, sand near the waterline.
   for (let z = 0; z < SZ; z++)

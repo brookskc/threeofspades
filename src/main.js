@@ -66,8 +66,11 @@ function deploy() {
   renderer.domElement.requestPointerLock();
 }
 
-// --- solo ---
+// --- solo / resume ---
+// After a dead connection the button becomes a way back to a clean menu.
+let netDead = false;
 $('playBtn').addEventListener('click', () => {
+  if (netDead) return location.reload();
   if (game.mode === 'client' && !game.myId) return; // still connecting
   deploy();
 });
@@ -89,8 +92,11 @@ $('hostBtn').addEventListener('click', () => {
         if (params.get('auto')) setPlaying(true);
       },
       onError: e => {
-        if (e.type === 'unavailable-id' && !params.get('code')) tryCode(); // roll again
-        else status(`network error: ${e.type}`);
+        if (e.type === 'unavailable-id' && !params.get('code')) {
+          net.destroy();
+          net = null;
+          tryCode(); // roll again with a fresh peer
+        } else status(`network error: ${e.type}`);
       },
       onData: (id, d) => game.hostOnData(id, d),
       onLeave: id => game.hostOnLeave(id),
@@ -118,10 +124,19 @@ $('joinBtn').addEventListener('click', () => {
     },
     onData: d => game.clientOnData(d),
     onClose: () => {
+      netDead = true;
       status('connection lost — the host left');
+      $('playBtn').textContent = 'RETURN TO MENU';
       if (playing) { setPlaying(false); document.exitPointerLock?.(); }
     },
-    onError: e => status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`),
+    onError: e => {
+      // Join failed before the match started — reset so the lobby still works.
+      net.destroy();
+      net = null;
+      game.net = null;
+      game.mode = 'solo';
+      status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`);
+    },
   });
   game.net = net;
   game.onWelcome = () => {
@@ -131,12 +146,19 @@ $('joinBtn').addEventListener('click', () => {
   };
 });
 
+$('codeInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('joinBtn').click();
+});
+
 $('againBtn').addEventListener('click', () => location.reload());
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
-  if (locked) setPlaying(true);
-  else if (!game.over) {
+  if (locked) { setPlaying(true); return; }
+  // Drop all held inputs so nobody runs/shoots blind while the menu is up.
+  game.player.keys = {};
+  game.player.mouseDown = [false, false, false];
+  if (!game.over && !netDead) {
     setPlaying(false);
     $('playBtn').textContent = 'RESUME';
   }
@@ -165,7 +187,9 @@ function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);
 
-  if (playing) {
+  // The host is authoritative — the simulation must never pause, even while
+  // the host's own menu is up, or every client freezes with it.
+  if (playing || game.mode === 'host') {
     game.update(dt);
   } else {
     // Slow cinematic orbit behind the menu.

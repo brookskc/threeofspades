@@ -45,7 +45,7 @@ export class Player {
   // ---------------- input ----------------
   _bind(dom) {
     addEventListener('keydown', e => {
-      if (e.repeat) return;
+      if (e.repeat || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
       if (!this.alive) return;
       if (e.code >= 'Digit1' && e.code <= 'Digit4') {
@@ -75,6 +75,7 @@ export class Player {
     if (this.reloading > 0) return;
     this.reloading = TOOLS[this.tool].reload;
     sfx.click();
+    this.game.hud.refreshTool(this);
   }
 
   _throwGrenade() {
@@ -234,6 +235,8 @@ export class Player {
     this.alive = true;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
     this.blocks = 50;
+    this.cooldown = 0;
+    this.reloading = 0;
     sfx.respawn();
   }
 }
