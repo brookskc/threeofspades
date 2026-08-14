@@ -99,6 +99,23 @@ export function animateSoldier(parts, speed, t) {
   parts.armR.rotation.x = s * 0.8;
 }
 
+// Death tumble, t seconds since the killing blow: keel over backward around
+// the feet, lie still a beat, then sink into the dirt and vanish.
+export function animateDeath(parts, t) {
+  const g = parts.group;
+  const fall = Math.min(1, t / 0.3);
+  g.rotation.x = -Math.PI / 2 * fall * (2 - fall); // ease-out tip-over
+  if (g.userData.deathY === undefined) g.userData.deathY = g.position.y;
+  g.position.y = g.userData.deathY - Math.max(0, t - 0.85) * 2.2;
+  if (t > 1.35) g.visible = false;
+}
+
+// Back on your feet — called on respawn before the next update tick.
+export function resetDeath(parts) {
+  parts.group.rotation.x = 0;
+  parts.group.userData.deathY = undefined;
+}
+
 // Remove an object from its parent and release all GPU resources below it.
 export function disposeObject(root) {
   root.removeFromParent();

@@ -1,6 +1,6 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
-import { makeSoldier, animateSoldier, disposeObject } from './entities.js';
+import { makeSoldier, animateSoldier, animateDeath, resetDeath, disposeObject } from './entities.js';
 
 function makeNameSprite(name, team) {
   const c = document.createElement('canvas');
@@ -29,6 +29,7 @@ export class Avatar {
     this.group.visible = false; // until the first update() places us
     this.samples = []; // [receiptTime, x, y, z, yaw]
     this.alive = true;
+    this.deadAt = null;  // wall-clock time of death, while the corpse tumbles
     this.pos = new THREE.Vector3();
     this.yaw = 0;
   }
@@ -42,10 +43,18 @@ export class Avatar {
     if (s.length > 12) s.shift();
   }
 
-  // Respawn must not interpolate from the corpse — drop position history.
+  // Death starts the corpse tumble; respawn drops position history so the
+  // avatar snaps to its spawn instead of gliding from the corpse.
   setAlive(alive) {
-    if (alive && !this.alive) this.samples.length = 0;
+    if (alive === this.alive) return;
     this.alive = alive;
+    if (alive) {
+      this.samples.length = 0;
+      this.deadAt = null;
+      resetDeath(this.parts);
+    } else {
+      this.deadAt = performance.now() / 1000;
+    }
   }
 
   // Render ~130ms in the past, interpolating between bracketing snapshots.
@@ -67,9 +76,13 @@ export class Avatar {
     if (dry < -Math.PI) dry += Math.PI * 2;
     const speed = this.pos.distanceTo(new THREE.Vector3(nx, ny, nz)) * 10;
     this.pos.set(nx, ny, nz);
-
-    this.group.visible = this.alive;
     this.group.position.copy(this.pos);
+
+    if (!this.alive) { // corpse: tumble where it fell, then vanish
+      if (this.deadAt !== null) animateDeath(this.parts, performance.now() / 1000 - this.deadAt);
+      return;
+    }
+    this.group.visible = true;
     this.group.rotation.y = a[4] + dry * k;
     animateSoldier(this.parts, speed, gameT + this.pos.x);
   }

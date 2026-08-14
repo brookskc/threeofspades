@@ -1,6 +1,6 @@
 // bots.js — AI soldiers: they hunt the flag, fight back, and dig through walls.
 import * as THREE from 'three';
-import { Body, makeSoldier, animateSoldier } from './entities.js';
+import { Body, makeSoldier, animateSoldier, animateDeath, resetDeath } from './entities.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
@@ -36,18 +36,41 @@ export class Bot {
     this.lastPos = this.body.pos.clone();
     this.wander = new THREE.Vector3();
     this.wanderT = 0;
+    this.digT = 0;             // tunneling swing cooldown
+    this.responding = false;   // rushing to recover our dropped flag?
+    this.deadT = -1;           // corpse tumble timer, while dead
   }
 
   goal() {
     const g = this.game;
+    this.responding = false;
     if (this.carrier) return g.flags[this.team].standPos();          // run it home
+    const own = g.flags[this.team];
+    // Our flag is on the ground — the two closest free bots sprint back for it.
+    this.responding = own.state === 'dropped' && this._isResponder(own.pos);
+    if (this.responding) return own.pos;
     const enemyFlag = g.flags[g.enemyOf(this.team)];
     if (enemyFlag.state === 'dropped') return enemyFlag.pos;         // grab the loose flag
     return enemyFlag.standPos();                                     // storm their base
   }
 
+  // Am I one of the two closest living, non-carrying teammates to the spot?
+  _isResponder(pos) {
+    const mates = this.game.bots
+      .filter(b => b.alive && b.team === this.team && !b.carrier)
+      .sort((a, b) => a.body.pos.distanceTo(pos) - b.body.pos.distanceTo(pos));
+    const i = mates.indexOf(this);
+    return i >= 0 && i < 2;
+  }
+
   update(dt) {
-    if (!this.alive) return;
+    if (!this.alive) { // corpse: tumble where it fell, then vanish
+      if (this.deadT >= 0 && this.deadT <= 1.4) {
+        this.deadT += dt;
+        animateDeath(this.parts, this.deadT);
+      }
+      return;
+    }
     const g = this.game, b = this.body;
 
     // --- pick something to shoot ---
@@ -61,7 +84,7 @@ export class Bot {
       this.wanderT = 1.5 + Math.random() * 2;
       this.wander.set((Math.random() - .5) * 8, 0, (Math.random() - .5) * 8);
     }
-    const dest = goal.clone().add(this.wander);
+    const dest = this.responding ? goal : goal.clone().add(this.wander); // responders beeline
     const dir = new THREE.Vector3(dest.x - b.pos.x, 0, dest.z - b.pos.z);
     const dist = dir.length();
     if (dist > 1.2) dir.normalize();
@@ -73,9 +96,25 @@ export class Bot {
       dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
     }
 
-    const speed = b.inWater ? 2.6 : (this.target ? 3.4 : 4.6);
+    const speed = b.inWater ? 2.6
+      : this.target ? 3.4
+      : this.responding ? 5.8   // urgency: our flag is on the ground
+      : 4.6;
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
+
+    // Tunnel through ridges instead of detouring around them: a two-high
+    // wall dead ahead gets shovelled, one swing every 0.35s.
+    this.digT -= dt;
+    if (!this.target && dist > 2 && this.digT <= 0) {
+      const ax = Math.floor(b.pos.x + dir.x * 1.5);
+      const az = Math.floor(b.pos.z + dir.z * 1.5);
+      const fy = Math.floor(b.pos.y);
+      if (g.world.solid(ax, fy, az) && g.world.solid(ax, fy + 1, az)) {
+        this.digT = 0.35;
+        this._dig(dir);
+      }
+    }
 
     // Stuck detection: sample displacement every 0.4s — hop, then dig through
     // whatever is in the way. (Per-frame thresholds lie: a full-speed bot only
@@ -141,7 +180,7 @@ export class Bot {
 
   die(killer) {
     this.alive = false;
-    this.parts.group.visible = false;
+    this.deadT = 0; // corpse tumble starts; the body hides itself when done
     this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.onDeath(this, killer);
   }
@@ -156,6 +195,8 @@ export class Bot {
     this.stuck = 0;
     this.sampleT = 0.4;
     this.lastPos.copy(this.body.pos);
+    this.deadT = -1;
+    resetDeath(this.parts);
     this.parts.group.visible = true;
   }
 }

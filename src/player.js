@@ -221,8 +221,19 @@ export class Player {
   die(killer) {
     this.alive = false;
     this.health = 0;
+    this.deadT = 0;
+    this.vmRoot.visible = false; // no floating gun while down
     sfx.hurt();
     this.game.onDeath(this, killer);
+  }
+
+  // First-person death: crumple to the dirt with a roll, hold until respawn.
+  deathCam(dt) {
+    this.deadT = Math.min(1, this.deadT + dt * 2.4);
+    const k = this.deadT * this.deadT * (3 - 2 * this.deadT); // smoothstep
+    const eye = this.body.eye();
+    this.camera.position.set(eye.x, eye.y - k * 1.2, eye.z);
+    this.camera.rotation.set(this.pitch + k * 0.3, this.yaw - Math.PI / 2, k * 0.5, 'YXZ');
   }
 
   respawn(at = null) {
@@ -237,6 +248,8 @@ export class Player {
     this.blocks = 50;
     this.cooldown = 0;
     this.reloading = 0;
+    this.deadT = 0;
+    this.vmRoot.visible = true;
     sfx.respawn();
   }
 }

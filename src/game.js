@@ -218,11 +218,11 @@ export class Game {
     this.world = new VoxelWorld(scene);
     generateMap(this.world, this.seed);
     this.effects = new Effects(scene);
+    this.bots = [];                        // before Player: its first spawnPoint reads these
     this.player = new Player(this, camera, dom);
     this.player.name = opts.name ?? 'You';
     this.hud = hud;
 
-    this.bots = [];
     if (this.mode !== 'client') this._spawnBots();
 
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
@@ -244,6 +244,8 @@ export class Game {
   rebuild(seed) {
     this.world.dispose();
     for (const b of this.bots) disposeObject(b.parts.group);
+    for (const av of this.avatars.values()) av.dispose();
+    this.avatars.clear();
     for (const t of ['green', 'blue']) this.flags[t].dispose();
     this.seed = seed;
     this.world = new VoxelWorld(this.scene);
@@ -269,7 +271,8 @@ export class Game {
 
   enemyOf(team) { return team === 'blue' ? 'green' : 'blue'; }
 
-  entities() { return [this.player, ...this.remote.values(), ...this.bots]; }
+  // this.player is undefined while its constructor asks for its first spawn.
+  entities() { return [this.player, ...this.remote.values(), ...this.bots].filter(Boolean); }
 
   // Announcements: show locally, and relay to clients when hosting.
   feed(html) {
@@ -292,11 +295,30 @@ export class Game {
   }
   foesOf(team) { return this.entities().filter(e => e.team !== team); }
 
+  // Pick a spawn just outside the base gate: never in water, never at the
+  // bottom of a fresh crater, and as far from living enemies as the options
+  // allow — spawning into a camper's sights is how you get one-shotted.
   spawnPoint(team) {
     const b = BASE[team];
     const dir = team === 'green' ? 1 : -1; // just outside the gate, facing the field
-    const x = b.x + dir * 12 + (Math.random() - 0.5) * 5;
-    const z = b.z + (Math.random() - 0.5) * 6;
+    const foes = this.foesOf(team).filter(e => e.alive).map(e => e.body.pos);
+    let best = null, bestScore = -1;
+    for (let i = 0; i < 16; i++) {
+      const x = b.x + dir * (4 + Math.random() * 16) + (Math.random() - 0.5) * 8;
+      const z = b.z + (Math.random() - 0.5) * 36;
+      const fx = Math.floor(x), fz = Math.floor(z);
+      const h = this.world.surface(fx, fz);
+      if (h < SEA) continue; // don't spawn swimming
+      let rim = h;
+      for (const [dx, dz] of [[3, 0], [-3, 0], [0, 3], [0, -3]])
+        rim = Math.max(rim, this.world.surface(fx + dx, fz + dz));
+      if (rim - h > 3) continue; // crater floor — spawn up on solid ground
+      let nearest = 40;
+      for (const f of foes) nearest = Math.min(nearest, Math.hypot(f.x - x, f.y - h, f.z - z));
+      if (nearest > bestScore) { bestScore = nearest; best = { x, y: h + 1.02, z }; }
+    }
+    if (best) return best;
+    const x = b.x + dir * 12, z = b.z;
     return { x, y: this.world.surface(Math.floor(x), Math.floor(z)) + 1.02, z };
   }
 
@@ -512,7 +534,7 @@ export class Game {
     for (const e of this.entities()) {
       if (!e.alive) continue;
       const d = g.pos.distanceTo(e.body.eye());
-      if (d < 7) this.damage(e, Math.max(15, 130 * (1 - d / 7)), g.owner);
+      if (d < 6.5) this.damage(e, Math.max(10, 85 * (1 - d / 6.5)), g.owner);
     }
   }
 
@@ -760,6 +782,7 @@ export class Game {
 
   _clientUpdate(dt) {
     if (this.player.alive) this.player.update(dt);
+    else this.player.deathCam(dt);
     for (const av of this.avatars.values()) av.update(this.time);
     this._sendT -= dt;
     if (this._sendT <= 0 && this.net) {
@@ -792,6 +815,7 @@ export class Game {
     if (this.mode === 'client') return this._clientUpdate(dt);
 
     if (this.player.alive) this.player.update(dt);
+    else this.player.deathCam(dt);
     for (const b of this.bots) b.update(dt);
 
     // Respawns.
