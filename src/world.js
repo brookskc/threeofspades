@@ -19,6 +19,9 @@ export const BLOCK = { GRASS: 1, DIRT: 2, SAND: 3, STONE: 4, BLUE: 5, GREEN: 6 }
 
 // Classic per-face shading baked into vertex colors — crisp, flat, cheap.
 const FACE_SHADE = [0.72, 0.72, 0.45, 1.0, 0.84, 0.84]; // -x +x -y +y -z +z
+// Baked per-vertex ambient occlusion: a corner walled in by solid neighbors
+// renders darker than an open one. Pure vertex color — free on the GPU.
+const AO_LEVEL = [0.52, 0.69, 0.85, 1.0];
 // Corner order matters: with indices (0,1,2),(2,1,3) the triangles must wind
 // counter-clockwise seen from OUTSIDE, or the face is backface-culled and the
 // terrain shows sky-holes when viewed along ±z.
@@ -99,12 +102,34 @@ export class VoxelWorld {
             const face = FACES[f], d = face.dir;
             if (this.get(x + d[0], y + d[1], z + d[2])) continue;
             const shade = FACE_SHADE[f];
+            // AO probes live in the air cell touching this face, one step to
+            // each side of the corner plus the diagonal.
+            const n = [x + d[0], y + d[1], z + d[2]];
+            const t0 = d[0] === 0 ? 0 : 1, t1 = d[2] === 0 ? 2 : 1; // tangent axes
+            const ao = [];
             const base = pos.length / 3;
             for (const [ox, oy, oz] of face.corners) {
               pos.push(x + ox, y + oy, z + oz);
-              col.push(c.r * shade, c.g * shade, c.b * shade);
+              const o = [ox, oy, oz];
+              const s0 = o[t0] ? 1 : -1, s1 = o[t1] ? 1 : -1;
+              const p = [n[0], n[1], n[2]];
+              p[t0] += s0;
+              const side0 = this.get(p[0], p[1], p[2]) ? 1 : 0;
+              p[t0] -= s0; p[t1] += s1;
+              const side1 = this.get(p[0], p[1], p[2]) ? 1 : 0;
+              p[t0] += s0;
+              const corn = this.get(p[0], p[1], p[2]) ? 1 : 0;
+              const a = side0 && side1 ? 0 : 3 - (side0 + side1 + corn);
+              ao.push(a);
+              const b = shade * AO_LEVEL[a];
+              col.push(c.r * b, c.g * b, c.b * b);
             }
-            ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+            // Flip the quad diagonal toward the brighter corners — otherwise
+            // the interpolation seam shows through the gradient.
+            if (ao[0] + ao[3] > ao[1] + ao[2])
+              ind.push(base, base + 1, base + 3, base, base + 3, base + 2);
+            else
+              ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
           }
         }
 

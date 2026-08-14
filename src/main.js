@@ -23,6 +23,7 @@ scene.add(camera); // so the viewmodel renders
 // Boots as a solo game — it doubles as the menu's orbiting backdrop.
 const game = new Game(scene, camera, renderer.domElement);
 window.__game = game; // debugging/testing handle
+window.__renderer = renderer;
 game.player.vmRoot.visible = false; // hidden until first deploy
 
 // Soft vertical sky gradient, painted once on a canvas.
