@@ -4,7 +4,7 @@
 
 ## ▶ Play now
 
-**[brookskc.github.io/three-of-spades](https://brookskc.github.io/three-of-spades/)** — no install, no build, no terminal. Just click.
+**[prairielab.net/three-of-spades](https://prairielab.net/three-of-spades/)** — no install, no build, no terminal. Just click.
 
 ![Title screen](docs/title.png)
 
