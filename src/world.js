@@ -18,7 +18,21 @@ export const PALETTE = [
 export const BLOCK = { GRASS: 1, DIRT: 2, SAND: 3, STONE: 4, BLUE: 5, GREEN: 6 };
 
 // Classic per-face shading baked into vertex colors — crisp, flat, cheap.
-const FACE_SHADE = [0.72, 0.72, 0.45, 1.0, 0.84, 0.84]; // -x +x -y +y -z +z
+// Tinted per channel: the sunlit top reads warm, the shadowed sides cool.
+const FACE_TINT = [
+  [0.68, 0.72, 0.79], // -x
+  [0.68, 0.72, 0.79], // +x
+  [0.45, 0.45, 0.47], // -y
+  [1.08, 1.03, 0.90], // +y (sun)
+  [0.80, 0.84, 0.91], // -z
+  [0.80, 0.84, 0.91], // +z
+];
+// Deterministic per-voxel brightness jitter — breaks up flat walls of one
+// block type without any texture. ±5%, baked like everything else.
+function jitter(x, y, z) {
+  const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453;
+  return 0.95 + 0.1 * (s - Math.floor(s));
+}
 // Baked per-vertex ambient occlusion: a corner walled in by solid neighbors
 // renders darker than an open one. Pure vertex color — free on the GPU.
 const AO_LEVEL = [0.52, 0.69, 0.85, 1.0];
@@ -35,6 +49,16 @@ const FACES = [
 ];
 
 const idx = (x, y, z) => (y * SZ + z) * SX + x;
+
+// Small seeded PRNG so the cloud layout is identical on every load.
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 export class VoxelWorld {
   constructor(scene) {
@@ -53,6 +77,31 @@ export class VoxelWorld {
     this.water.position.set(SX / 2, SEA + 0.42, SZ / 2);
     scene.add(this.water);
     this._waterBase = this.water.geometry.attributes.position.array.slice();
+
+    // Clouds — the signature AoS sky: puffy clusters of scaled voxel boxes,
+    // one shared geometry, one shared translucent material. They drift slowly
+    // past the map and wrap around; ~80 boxes total, so this is free.
+    this.clouds = new THREE.Group();
+    const puffGeo = new THREE.BoxGeometry(1, 1, 1);
+    const puffMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.82, depthWrite: false,
+    });
+    const rnd = mulberry32(20240);
+    for (let i = 0; i < 16; i++) {
+      const cl = new THREE.Group();
+      const puffs = 3 + (i % 4);
+      for (let p = 0; p < puffs; p++) {
+        const m = new THREE.Mesh(puffGeo, puffMat);
+        m.scale.set(7 + rnd() * 12, 2.2 + rnd() * 1.6, 6 + rnd() * 9);
+        m.position.set((p - puffs / 2) * (5 + rnd() * 4), (rnd() - 0.5) * 1.5, (rnd() - 0.5) * 8);
+        cl.add(m);
+      }
+      cl.position.set(rnd() * SX, 66 + rnd() * 8, rnd() * SZ); // above the menu orbit (y=58)
+      cl.userData.x0 = cl.position.x + 260;      // offset so the wrap window is wide
+      cl.userData.speed = 1.1 + rnd() * 1.3;     // voxels per second, leisurely
+      this.clouds.add(cl);
+    }
+    scene.add(this.clouds);
   }
 
   get(x, y, z) {
@@ -98,10 +147,12 @@ export class VoxelWorld {
           const v = this.data[idx(x, y, z)];
           if (!v) continue;
           c.setHex(PALETTE[v].color);
+          const j = jitter(x, y, z);
+          const jr = c.r * j, jg = c.g * j, jb = c.b * j;
           for (let f = 0; f < 6; f++) {
             const face = FACES[f], d = face.dir;
             if (this.get(x + d[0], y + d[1], z + d[2])) continue;
-            const shade = FACE_SHADE[f];
+            const tint = FACE_TINT[f];
             // AO probes live in the air cell touching this face, one step to
             // each side of the corner plus the diagonal.
             const n = [x + d[0], y + d[1], z + d[2]];
@@ -121,8 +172,8 @@ export class VoxelWorld {
               const corn = this.get(p[0], p[1], p[2]) ? 1 : 0;
               const a = side0 && side1 ? 0 : 3 - (side0 + side1 + corn);
               ao.push(a);
-              const b = shade * AO_LEVEL[a];
-              col.push(c.r * b, c.g * b, c.b * b);
+              const b = AO_LEVEL[a];
+              col.push(jr * tint[0] * b, jg * tint[1] * b, jb * tint[2] * b);
             }
             // Flip the quad diagonal toward the brighter corners — otherwise
             // the interpolation seam shows through the gradient.
@@ -215,9 +266,15 @@ export class VoxelWorld {
     this.water.geometry.dispose();
     this.water.material.dispose();
     this.material.dispose();
+    this.clouds.removeFromParent();
+    if (this.clouds.children.length) { // shared puff resources, freed once
+      this.clouds.children[0].children[0].geometry.dispose();
+      this.clouds.children[0].children[0].material.dispose();
+    }
   }
 
-  animateWater(t) {
+  // Per-frame sky life: water ripples, clouds drift and wrap past the map.
+  animateSky(t) {
     const attr = this.water.geometry.attributes.position;
     const base = this._waterBase;
     for (let i = 0; i < attr.count; i++) {
@@ -225,5 +282,7 @@ export class VoxelWorld {
       attr.array[i * 3 + 2] = Math.sin(t * 1.3 + bx * 0.12 + by * 0.09) * 0.14;
     }
     attr.needsUpdate = true;
+    for (const cl of this.clouds.children)
+      cl.position.x = ((cl.userData.x0 + t * cl.userData.speed) % (SX + 520)) - 260;
   }
 }

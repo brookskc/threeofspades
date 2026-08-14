@@ -813,7 +813,7 @@ export class Game {
   // ---------------- main tick ----------------
   update(dt) {
     this.time += dt;
-    this.world.animateWater(this.time);
+    this.world.animateSky(this.time);
     if (this.mode === 'client') return this._clientUpdate(dt);
 
     if (this.player.alive) this.player.update(dt);

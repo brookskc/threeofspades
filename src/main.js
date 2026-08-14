@@ -26,6 +26,26 @@ window.__game = game; // debugging/testing handle
 window.__renderer = renderer;
 game.player.vmRoot.visible = false; // hidden until first deploy
 
+// A soft sun sprite high in the sky — one textured quad, always faces the
+// camera, excluded from fog so it keeps its glow at any distance.
+function makeSun() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(64, 64, 6, 64, 64, 62);
+  rg.addColorStop(0, 'rgba(255,252,235,1)');
+  rg.addColorStop(0.25, 'rgba(255,244,200,.9)');
+  rg.addColorStop(1, 'rgba(255,244,200,0)');
+  g.fillStyle = rg;
+  g.fillRect(0, 0, 128, 128);
+  const mat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), fog: false, depthWrite: false });
+  const s = new THREE.Sprite(mat);
+  s.position.set(180, 210, 60);
+  s.scale.setScalar(56);
+  return s;
+}
+scene.add(makeSun());
+
 // Soft vertical sky gradient, painted once on a canvas.
 function skyGradient() {
   const c = document.createElement('canvas');
@@ -201,7 +221,7 @@ function frame() {
       SZ / 2 + Math.sin(menuT) * 95
     );
     camera.lookAt(SX / 2, 24, SZ / 2);
-    game.world.animateWater(game.time += dt);
+    game.world.animateSky(game.time += dt);
     for (const f of ['green', 'blue']) game.flags[f].clientUpdate(game.time);
     game.effects.update(dt);
   }

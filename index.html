@@ -88,6 +88,9 @@
     text-shadow:0 2px 12px rgba(0,0,0,.8); opacity:0; transition:opacity .3s; }
   #vignette { position:fixed; inset:0; pointer-events:none; z-index:9; opacity:0;
     background:radial-gradient(ellipse at center, transparent 55%, rgba(200,30,30,.55)); }
+  /* permanent soft darkening at the frame edges — pure CSS, zero GPU */
+  #vig2 { position:fixed; inset:0; pointer-events:none; z-index:8;
+    background:radial-gradient(ellipse at center, transparent 62%, rgba(10,18,30,.20)); }
   #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
     font-size:15px; letter-spacing:2px; opacity:0; }
 </style>
@@ -97,6 +100,7 @@
 </script>
 </head>
 <body>
+  <div id="vig2"></div>
   <div id="vignette"></div>
 
   <div id="hud">

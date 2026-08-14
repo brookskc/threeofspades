@@ -61,6 +61,32 @@ export class Body {
 }
 
 // A blocky AoS-style soldier: legs, torso, arms, head, gun — team colored.
+// Soft blob shadow shared by every soldier — a radial-gradient quad at the
+// feet. Grounds the model for two triangles. Shared resources are tagged so
+// disposeObject leaves them alone.
+let blobGeo = null, blobMat = null;
+function blobShadow() {
+  if (!blobGeo) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g2 = c.getContext('2d');
+    const rg = g2.createRadialGradient(32, 32, 4, 32, 32, 30);
+    rg.addColorStop(0, 'rgba(0,0,0,.42)');
+    rg.addColorStop(1, 'rgba(0,0,0,0)');
+    g2.fillStyle = rg;
+    g2.fillRect(0, 0, 64, 64);
+    blobGeo = new THREE.PlaneGeometry(1.2, 1.2);
+    blobMat = new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false,
+    });
+  }
+  const m = new THREE.Mesh(blobGeo, blobMat);
+  m.userData.shared = true;
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = 0.035;
+  return m;
+}
+
 export function makeSoldier(teamColor) {
   const g = new THREE.Group();
   const skin = new THREE.MeshBasicMaterial({ color: 0xd9a066 });
@@ -85,8 +111,10 @@ export function makeSoldier(teamColor) {
   const head = box(0.34, 0.34, 0.34, skin, 0, 1.42, 0);
   box(0.4, 0.12, 0.4, cloth, 0, 1.62, 0); // helmet brim
   const gun = box(0.09, 0.12, 0.7, dark, 0.2, 1.1, -0.35);
+  const blob = blobShadow();
+  g.add(blob);
 
-  return { group: g, legL, legR, armL, armR, head, torso, gun };
+  return { group: g, legL, legR, armL, armR, head, torso, gun, blob };
 }
 
 // Shared walk-cycle animation for player-less bodies.
@@ -102,6 +130,7 @@ export function animateSoldier(parts, speed, t) {
 // Death tumble, t seconds since the killing blow: keel over backward around
 // the feet, lie still a beat, then sink into the dirt and vanish.
 export function animateDeath(parts, t) {
+  if (parts.blob) parts.blob.visible = false; // shadows don't tumble
   const g = parts.group;
   const fall = Math.min(1, t / 0.3);
   g.rotation.x = -Math.PI / 2 * fall * (2 - fall); // ease-out tip-over
@@ -114,12 +143,14 @@ export function animateDeath(parts, t) {
 export function resetDeath(parts) {
   parts.group.rotation.x = 0;
   parts.group.userData.deathY = undefined;
+  if (parts.blob) parts.blob.visible = true;
 }
 
 // Remove an object from its parent and release all GPU resources below it.
 export function disposeObject(root) {
   root.removeFromParent();
   root.traverse(o => {
+    if (o.userData.shared) return; // shared geometry/material outlives any one soldier
     o.geometry?.dispose();
     if (o.material) {
       o.material.map?.dispose();
