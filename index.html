@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPADES.JS — a voxel arena shooter</title>
+<style>
+  :root { --green:#5db85d; --blue:#5b7fe0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0b0e14;
+    font-family:"Segoe UI", system-ui, sans-serif; color:#e8ecf2; }
+  canvas { display:block; }
+
+  /* ---------- overlay screens ---------- */
+  .screen { position:fixed; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center;
+    background:radial-gradient(ellipse at center, rgba(8,12,20,.35), rgba(8,12,20,.82));
+    transition:opacity .35s; z-index:20; }
+  .screen.hidden { opacity:0; pointer-events:none; }
+  .title { font-size:64px; font-weight:800; letter-spacing:6px;
+    text-shadow:0 4px 24px rgba(0,0,0,.6); }
+  .title .ace { color:var(--green); }
+  .title .spades { color:#e8ecf2; }
+  .subtitle { margin-top:6px; font-size:14px; letter-spacing:4px; opacity:.65;
+    text-transform:uppercase; }
+  .play { margin-top:38px; padding:14px 54px; font-size:20px; letter-spacing:3px;
+    border:2px solid rgba(255,255,255,.75); border-radius:4px; cursor:pointer;
+    background:rgba(255,255,255,.06); transition:.2s; user-select:none; }
+  .play:hover { background:rgba(255,255,255,.18); transform:translateY(-2px); }
+  .controls { margin-top:34px; font-size:13px; line-height:1.9; opacity:.7; }
+  .controls b { display:inline-block; min-width:120px; text-align:right;
+    margin-right:14px; color:#ffd97a; font-weight:600; }
+  #endTitle { font-size:52px; font-weight:800; letter-spacing:4px; }
+  #endDetail { margin-top:10px; font-size:16px; opacity:.75; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:10; opacity:0;
+    transition:opacity .3s; }
+  #hud.on { opacity:1; }
+  #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.9);
+    box-shadow:0 0 4px rgba(0,0,0,.8); }
+  #hitmark { position:absolute; left:50%; top:50%; width:22px; height:22px;
+    transform:translate(-50%,-50%) rotate(45deg); opacity:0; }
+  #hitmark::before,#hitmark::after { content:""; position:absolute; background:#ffd97a; }
+  #hitmark::before { left:10px; top:0; width:2px; height:22px; }
+  #hitmark::after { top:10px; left:0; height:2px; width:22px; }
+  #hitmark.pop { animation:hitpop .18s ease-out; }
+  @keyframes hitpop { 0%{opacity:1; transform:translate(-50%,-50%) rotate(45deg) scale(1.4);}
+    100%{opacity:0; transform:translate(-50%,-50%) rotate(45deg) scale(.9);} }
+
+  .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
+    border-radius:6px; backdrop-filter:blur(3px); }
+  #vitals { left:22px; bottom:22px; min-width:210px; }
+  #healthbar { width:100%; height:10px; background:rgba(255,255,255,.12);
+    border-radius:5px; overflow:hidden; }
+  #healthfill { height:100%; width:100%; border-radius:5px;
+    background:linear-gradient(90deg,#5db85d,#8fd98f); transition:width .15s; }
+  #healthnum { font-size:12px; opacity:.8; margin-top:5px; letter-spacing:1px; }
+  #tool { right:22px; bottom:22px; text-align:right; min-width:170px; }
+  #toolname { font-size:15px; font-weight:700; letter-spacing:2px; }
+  #ammo { font-size:26px; font-weight:800; margin-top:2px; }
+  #ammo small { font-size:13px; opacity:.55; font-weight:400; }
+  #toolhint { font-size:11px; opacity:.5; margin-top:3px; }
+
+  #score { display:flex; justify-content:center;
+    gap:14px; align-items:center; font-size:20px; font-weight:800; letter-spacing:2px; }
+  #score .g { color:var(--green); } #score .b { color:var(--blue); }
+  #flagstate { font-size:11px; font-weight:400; letter-spacing:1px; opacity:.75;
+    text-align:center; margin-top:2px; }
+
+  #feed { right:22px; top:60px; text-align:right; font-size:13px; line-height:1.8; }
+  #feed div { opacity:.9; text-shadow:0 1px 3px rgba(0,0,0,.7); }
+  #msg { position:absolute; left:50%; top:26%; transform:translateX(-50%);
+    font-size:26px; font-weight:800; letter-spacing:3px;
+    text-shadow:0 2px 12px rgba(0,0,0,.8); opacity:0; transition:opacity .3s; }
+  #vignette { position:fixed; inset:0; pointer-events:none; z-index:9; opacity:0;
+    background:radial-gradient(ellipse at center, transparent 55%, rgba(200,30,30,.55)); }
+  #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
+    font-size:15px; letter-spacing:2px; opacity:0; }
+</style>
+<script type="importmap">
+  { "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+  <div id="vignette"></div>
+
+  <div id="hud">
+    <div id="crosshair"></div><div id="hitmark"></div>
+    <div class="panel" id="vitals">
+      <div id="healthbar"><div id="healthfill"></div></div>
+      <div id="healthnum">100 HP</div>
+    </div>
+    <div class="panel" id="tool">
+      <div id="toolname">RIFLE</div>
+      <div id="ammo">10 <small>/ 10</small></div>
+      <div id="toolhint">1 rifle · 2 smg · 3 spade · 4 block · G grenade</div>
+    </div>
+    <div class="panel" id="scorewrap" style="left:50%;top:16px;transform:translateX(-50%);text-align:center;">
+      <div id="score"><span class="g">GREEN 0</span><span style="opacity:.4">—</span><span class="b">0 BLUE</span></div>
+      <div id="flagstate">first to 3 captures</div>
+    </div>
+    <div id="feed"></div>
+    <div id="msg"></div>
+    <div id="respawn"></div>
+  </div>
+
+  <div class="screen" id="menu">
+    <div class="title"><span class="ace">SPADES</span><span class="spades">.JS</span></div>
+    <div class="subtitle">a voxel arena shooter · ace of spades × three.js</div>
+    <div class="play" id="playBtn">CLICK TO DEPLOY</div>
+    <div class="controls">
+      <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
+      <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
+      <div><b>1 – 4</b> rifle · smg · spade · block &nbsp;·&nbsp; <b>G</b> grenade &nbsp;·&nbsp; <b>R</b> reload</div>
+      <div><b>MISSION</b> steal the blue flag, bring it home — first to 3 captures wins</div>
+    </div>
+  </div>
+
+  <div class="screen hidden" id="end">
+    <div id="endTitle">VICTORY</div>
+    <div id="endDetail"></div>
+    <div class="play" id="againBtn">PLAY AGAIN</div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
