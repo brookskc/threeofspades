@@ -1,4 +1,5 @@
 // game.js — orchestration: combat, flags, grenades, score, HUD.
+// Modes: 'solo' (local only), 'host' (authoritative, broadcasts), 'client' (thin).
 import * as THREE from 'three';
 import { VoxelWorld, SEA, BLOCK, PALETTE } from './world.js';
 import { generateMap, BASE } from './mapgen.js';
@@ -6,9 +7,14 @@ import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
 import { Effects } from './effects.js';
 import { sfx } from './audio.js';
+import { Body } from './entities.js';
+import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
 const $ = id => document.getElementById(id);
+const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
+const arr = v => [v.x, v.y, v.z];
+const FLAG_CODE = { home: 0, carried: 1, dropped: 2 };
 
 // ---------------------------------------------------------------- flags
 class Flag {
@@ -65,6 +71,11 @@ class Flag {
       this.dropTimer -= dt;
       if (this.dropTimer <= 0) this.returnHome();
     }
+    this.clientUpdate(t);
+  }
+
+  // Visuals only — clients set pos/state from snapshots and call this.
+  clientUpdate(t) {
     this.group.position.copy(this.pos);
     // Gentle cloth ripple.
     const p = this.cloth.geometry.attributes.position;
@@ -147,24 +158,73 @@ const hud = {
 const nameSpan = e =>
   `<span style="color:${e.team === 'blue' ? '#8fa8ee' : '#8fd98f'}">${e.name}</span>`;
 
+// A network player as the host sees them: client-authoritative position,
+// host-authoritative health, flags, and respawns.
+class RemoteProxy {
+  constructor(game, id, name, team) {
+    this.game = game;
+    this.id = id;
+    this.name = name;
+    this.team = team;
+    this.isRemote = true;
+    const p = game.spawnPoint(team);
+    this.body = new Body(game.world, p.x, p.y, p.z);
+    this.health = 100;
+    this.alive = true;
+    this.carrier = false;
+    this.blocks = 50;
+    this.tool = 0;
+    this.yaw = 0;
+    this.avatar = new Avatar(game.scene, team, name);
+    this.avatar.push(p.x, p.y, p.z, 0);
+  }
+  die(killer) {
+    this.alive = false;
+    this.game.effects.burst(this.body.eye(), 26,
+      this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
+    this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
+    this.game.onDeath(this, killer);
+  }
+  respawn() {
+    const p = this.game.spawnPoint(this.team);
+    this.body.pos.set(p.x, p.y, p.z);
+    this.health = 100;
+    this.alive = true;
+    this.blocks = 50;
+    this.game.net.sendTo(this.id, { t: 'e', k: 'spawn', x: p.x, y: p.y, z: p.z });
+  }
+}
+
 // ---------------------------------------------------------------- game
 export class Game {
-  constructor(scene, camera, dom) {
+  constructor(scene, camera, dom, opts = {}) {
     this.scene = scene;
     this.camera = camera;
     this.time = 0;
     this.over = false;
+    this.mode = opts.mode ?? 'solo';       // solo | host | client
+    this.net = opts.net ?? null;
+    this.seed = opts.seed ?? 1979;
+    this.editLog = [];                     // host: every world change, for late joiners
+    this.remote = new Map();               // host: peerId -> RemoteProxy
+    this.avatars = new Map();              // client: key -> Avatar
+    this.myId = null;
+    this._snapT = 0;
+    this._sendT = 0;
+    this._lastHealth = 100;
 
     this.world = new VoxelWorld(scene);
-    generateMap(this.world);
+    generateMap(this.world, this.seed);
     this.effects = new Effects(scene);
     this.player = new Player(this, camera, dom);
-    this.player.name = 'You';
+    this.player.name = opts.name ?? 'You';
     this.hud = hud;
 
     this.bots = [];
-    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
-    for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
+    if (this.mode !== 'client') {
+      for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
+      for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
+    }
 
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.captures = { green: 0, blue: 0 };
@@ -181,9 +241,49 @@ export class Game {
     hud.score(this);
   }
 
+  // Tear down and regenerate on a new seed (host room start / client welcome).
+  rebuild(seed) {
+    this.scene.remove(this.world.group, this.world.water);
+    for (const b of this.bots) this.scene.remove(b.parts.group);
+    for (const t of ['green', 'blue']) this.scene.remove(this.flags[t].group);
+    this.seed = seed;
+    this.world = new VoxelWorld(this.scene);
+    generateMap(this.world, seed);
+    this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
+    if (this.mode !== 'client') {
+      this.bots = [];
+      for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
+      for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
+    }
+    this.captures = { green: 0, blue: 0 };
+    this.editLog = [];
+    this.player.respawn();
+    hud.score(this);
+  }
+
   enemyOf(team) { return team === 'blue' ? 'green' : 'blue'; }
 
-  entities() { return [this.player, ...this.bots]; }
+  entities() { return [this.player, ...this.remote.values(), ...this.bots]; }
+
+  // Announcements: show locally, and relay to clients when hosting.
+  feed(html) {
+    hud.feed(html);
+    if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'feed', html });
+  }
+  message(text, color = '#fff') {
+    hud.message(text, color);
+    if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'msg', text, color });
+  }
+  // A centered message for one specific remote player.
+  messageTo(e, text, color) {
+    if (e === this.player) hud.message(text, color);
+    else if (e.isRemote) this.net.sendTo(e.id, { t: 'e', k: 'msg', text, color });
+  }
+  // A centered message for everyone on a team (host tags it; clients filter).
+  messageTeam(team, text, color) {
+    if (this.player.team === team) hud.message(text, color);
+    if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'msg', text, color, team });
+  }
   foesOf(team) { return this.entities().filter(e => e.team !== team); }
 
   spawnPoint(team) {
@@ -227,21 +327,54 @@ export class Game {
         ? from.clone().addScaledVector(d, Math.max(0, voxel.dist - 0.05))
         : from.clone().addScaledVector(d, RANGE);
     const muzzle = from.clone().addScaledVector(d, 1.2).add(new THREE.Vector3(0, -0.12, 0));
-    this.effects.tracer(muzzle, end);
+    const hex = voxel ? PALETTE[this.world.get(voxel.x, voxel.y, voxel.z)].color : 0;
+    this.shotFx(muzzle, end, !!hit, hex, from);
 
-    if (shooter !== this.player) {
-      if (from.distanceTo(this.player.body.pos) < 55) sfx.smg();
+    if (this.mode === 'host') {
+      this.net.broadcast({ t: 'e', k: 'shot', sid: shooter.isRemote ? shooter.id : 'HOST',
+        f: arr(muzzle), e: arr(end), hit: !!hit, hex });
     }
 
     if (hit) {
       const dmg = spec.damage * (head ? (spec.headMult ?? 1.5) : 1);
-      this.effects.burst(end, 10, 0xc0392b, 4);
       if (shooter === this.player) { sfx.hit(); hud.hitmark(); }
+      else if (shooter.isRemote) this.net.sendTo(shooter.id, { t: 'e', k: 'hit' });
       this.damage(hit, dmg, shooter);
-    } else if (voxel) {
-      const hex = PALETTE[this.world.get(voxel.x, voxel.y, voxel.z)].color;
-      this.effects.burst(end, 6, hex, 3);
     }
+  }
+
+  // Tracer + impact particles + report sound (shared by local sim and net replay).
+  shotFx(muzzle, end, hit, hex, from) {
+    this.effects.tracer(muzzle, end);
+    if (hit) this.effects.burst(end, 10, 0xc0392b, 4);
+    else if (hex) this.effects.burst(end, 6, hex, 3);
+    if (from.distanceTo(this.player.body.pos) < 55 &&
+        from.distanceToSquared(this.player.body.eye()) > 4) sfx.smg();
+  }
+
+  // Player tool entry points — route locally (solo/host) or to the host (client).
+  requestShoot(p, t) {
+    if (this.mode !== 'client') return this.fireHitscan(p, p.body.eye(), p.lookDir(), t);
+    const from = p.body.eye(), dir = p.lookDir();
+    const vox = this.world.raycast(from, dir, 130);
+    const end = vox
+      ? from.clone().addScaledVector(dir, Math.max(0, vox.dist - 0.05))
+      : from.clone().addScaledVector(dir, 130);
+    this.effects.tracer(from.clone().addScaledVector(dir, 1.2).add(new THREE.Vector3(0, -0.12, 0)), end);
+    this.net.send({ t: 'a', k: 'shoot', o: arr(from), d: arr(dir), tool: p.tool });
+  }
+  requestDig(p) {
+    if (this.mode !== 'client') return this.playerDig(p);
+    this.net.send({ t: 'a', k: 'dig', o: arr(p.body.eye()), d: arr(p.lookDir()) });
+  }
+  requestPlace(p) {
+    if (this.mode !== 'client') return this.playerPlace(p);
+    if (p.blocks <= 0) { sfx.click(); return; }
+    this.net.send({ t: 'a', k: 'place', o: arr(p.body.eye()), d: arr(p.lookDir()) });
+  }
+  requestNade(p) {
+    if (this.mode !== 'client') return this.throwGrenade(p, p.body.eye(), p.lookDir(), 13);
+    this.net.send({ t: 'a', k: 'nade', o: arr(p.body.eye()), d: arr(p.lookDir()) });
   }
 
   damage(victim, amount, attacker) {
@@ -272,36 +405,51 @@ export class Game {
   }
 
   // ---------------- block tools ----------------
+  applyEdit(x, y, z, v) {
+    this.world.set(x, y, z, v);
+    if (this.mode === 'host') {
+      this.editLog.push([x, y, z, v]);
+      this.net.broadcast({ t: 'e', k: 'edit', x, y, z, v });
+    }
+  }
+
   digVoxel(who, x, y, z) {
     const v = this.world.get(x, y, z);
     if (!v) return;
-    this.world.set(x, y, z, 0);
+    this.applyEdit(x, y, z, 0);
     this.effects.blockBurst([{ x, y, z, v }]);
     if (who === this.player) {
       this.player.blocks = Math.min(99, this.player.blocks + 1);
       sfx.dig();
       hud.refreshTool(this.player);
+    } else if (who.isRemote) {
+      who.blocks = Math.min(99, who.blocks + 1);
     }
   }
 
-  playerDig(p) {
-    const hit = this.world.raycast(p.body.eye(), p.lookDir(), 5);
+  playerDig(p, origin = null, dir = null) {
+    origin = origin ?? p.body.eye();
+    dir = dir ?? p.lookDir();
+    const hit = this.world.raycast(origin, dir, 5);
     // Spade doubles as a melee weapon.
     for (const e of this.foesOf(p.team)) {
-      if (e.alive && e.body.eye().distanceTo(p.body.eye()) < 3.2) {
+      if (e.alive && e.body.eye().distanceTo(origin) < 3.2) {
         this.effects.burst(e.body.eye(), 10, 0xc0392b, 4);
-        sfx.hit(); hud.hitmark();
+        if (p === this.player) { sfx.hit(); hud.hitmark(); }
+        else if (p.isRemote) this.net.sendTo(p.id, { t: 'e', k: 'hit' });
         this.damage(e, 45, p);
         return;
       }
     }
     if (hit) this.digVoxel(p, hit.x, hit.y, hit.z);
-    else sfx.dig();
+    else if (p === this.player) sfx.dig();
   }
 
-  playerPlace(p) {
-    if (p.blocks <= 0) { sfx.click(); return; }
-    const hit = this.world.raycast(p.body.eye(), p.lookDir(), 6);
+  playerPlace(p, origin = null, dir = null) {
+    if (p.blocks <= 0) { if (p === this.player) sfx.click(); return; }
+    origin = origin ?? p.body.eye();
+    dir = dir ?? p.lookDir();
+    const hit = this.world.raycast(origin, dir, 6);
     if (!hit) return;
     const x = hit.x + hit.nx, y = hit.y + hit.ny, z = hit.z + hit.nz;
     if (this.world.get(x, y, z)) return;
@@ -313,10 +461,9 @@ export class Game {
           z + 1 > b.pos.z - b.half.x && z < b.pos.z + b.half.x &&
           y + 1 > b.pos.y && y < b.pos.y + b.half.h) return;
     }
-    this.world.set(x, y, z, BLOCK.GREEN);
+    this.applyEdit(x, y, z, p.team === 'blue' ? BLOCK.BLUE : BLOCK.GREEN);
     p.blocks--;
-    sfx.place();
-    hud.refreshTool(p);
+    if (p === this.player) { sfx.place(); hud.refreshTool(p); }
   }
 
   // ---------------- grenades ----------------
@@ -351,19 +498,26 @@ export class Game {
   }
 
   _explode(g) {
-    this.effects.explode(g.pos);
-    sfx.explosion();
-    const r = 3.6;
-    const removed = this.world.carve(
-      Math.floor(g.pos.x), Math.floor(g.pos.y), Math.floor(g.pos.z), r);
-    this.effects.blockBurst(removed);
-    const dp = g.pos.distanceTo(this.player.body.pos);
-    this.effects.addShake(Math.max(0, 0.5 - dp * 0.012));
+    this.explodeAt(g.pos.x, g.pos.y, g.pos.z, 3.6);
+    if (this.mode === 'host') {
+      this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, 3.6]);
+      this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: 3.6 });
+    }
     for (const e of this.entities()) {
       if (!e.alive) continue;
       const d = g.pos.distanceTo(e.body.eye());
       if (d < 7) this.damage(e, Math.max(15, 130 * (1 - d / 7)), g.owner);
     }
+  }
+
+  // Visual + terrain side of an explosion — identical on host and clients.
+  explodeAt(x, y, z, r) {
+    const pos = new THREE.Vector3(x, y, z);
+    this.effects.explode(pos);
+    sfx.explosion();
+    const removed = this.world.carve(Math.floor(x), Math.floor(y), Math.floor(z), r);
+    this.effects.blockBurst(removed);
+    this.effects.addShake(Math.max(0, 0.5 - pos.distanceTo(this.player.body.pos) * 0.012));
   }
 
   // ---------------- flag logic ----------------
@@ -380,15 +534,15 @@ export class Game {
         enemyFlag.carrier = e;
         e.carrier = true;
         sfx.pickup();
-        hud.feed(`${nameSpan(e)} took the ${this.enemyOf(e.team).toUpperCase()} flag`);
-        if (e === this.player) hud.message('YOU HAVE THE FLAG — RUN HOME!', '#ffd97a');
-        else if (e.team === 'blue') hud.message('ENEMY HAS OUR FLAG!', '#e74c3c');
+        this.feed(`${nameSpan(e)} took the ${this.enemyOf(e.team).toUpperCase()} flag`);
+        this.messageTo(e, 'YOU HAVE THE FLAG — RUN HOME!', '#ffd97a');
+        this.messageTeam(e.team === 'blue' ? 'green' : 'blue', 'OUR FLAG IS TAKEN!', '#e74c3c');
       }
       // Touching your own dropped flag sends it home.
       if (ownFlag.state === 'dropped' && e.body.pos.distanceTo(ownFlag.pos) < 1.9) {
         ownFlag.returnHome();
-        hud.feed(`${nameSpan(e)} returned the ${e.team.toUpperCase()} flag`);
-        if (e === this.player) hud.message('FLAG RETURNED', '#8fd98f');
+        this.feed(`${nameSpan(e)} returned the ${e.team.toUpperCase()} flag`);
+        this.messageTo(e, 'FLAG RETURNED', '#8fd98f');
       }
       // Capture: reach your stand with the enemy flag while yours is home.
       if (e.carrier && ownFlag.state === 'home' &&
@@ -397,8 +551,8 @@ export class Game {
         this.captures[e.team]++;
         enemyFlag.returnHome();
         sfx.capture();
-        hud.feed(`${nameSpan(e)} <b>CAPTURED</b> the flag`);
-        hud.message(e.team === 'green' ? 'CAPTURE! GREEN SCORES' : 'BLUE SCORES',
+        this.feed(`${nameSpan(e)} <b>CAPTURED</b> the flag`);
+        this.message(e.team === 'green' ? 'CAPTURE! GREEN SCORES' : 'BLUE SCORES',
           e.team === 'green' ? '#8fd98f' : '#e74c3c');
         hud.score(this);
         if (this.captures[e.team] >= WIN_SCORE) this._end(e.team);
@@ -408,21 +562,216 @@ export class Game {
   }
 
   _end(winner) {
+    if (this.over) return;
     this.over = true;
+    if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'end', winner });
     document.exitPointerLock();
     $('hud').classList.remove('on');
-    $('endTitle').textContent = winner === 'green' ? 'VICTORY' : 'DEFEAT';
-    $('endTitle').style.color = winner === 'green' ? '#8fd98f' : '#e74c3c';
+    const won = winner === this.player.team;
+    $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
+    $('endTitle').style.color = won ? '#8fd98f' : '#e74c3c';
     $('endDetail').textContent =
       `${winner.toUpperCase()} wins ${this.captures.green} — ${this.captures.blue}`;
     $('end').classList.remove('hidden');
-    if (winner !== 'green') sfx.lose();
+    if (!won) sfx.lose();
+  }
+
+  // ---------------- host networking ----------------
+  hostOnData(id, d) {
+    if (d.t === 'hi') {
+      if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
+      return this._hostAddPlayer(id, d.name);
+    }
+    const p = this.remote.get(id);
+    if (!p) return;
+    if (d.t === 's') {
+      p.body.pos.set(d.x, d.y, d.z);
+      p.tool = d.tool;
+      p.avatar.push(d.x, d.y, d.z, d.yaw);
+    } else if (d.t === 'a' && p.alive && !this.over) {
+      const o = v3(d.o), dir = v3(d.d).normalize();
+      if (d.k === 'shoot') this.fireHitscan(p, o, dir, TOOLS[d.tool] ?? TOOLS[0]);
+      else if (d.k === 'dig') this.playerDig(p, o, dir);
+      else if (d.k === 'place') this.playerPlace(p, o, dir);
+      else if (d.k === 'nade') this.throwGrenade(p, o, dir, 13);
+    }
+  }
+
+  _hostAddPlayer(id, name) {
+    name = String(name ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'recruit';
+    const humans = { green: 1, blue: 0 }; // host is green
+    for (const p of this.remote.values()) humans[p.team]++;
+    const team = humans.green <= humans.blue ? 'green' : 'blue';
+    const proxy = new RemoteProxy(this, id, name, team);
+    this.remote.set(id, proxy);
+    this._removeBot(team);
+    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, log: this.editLog });
+    this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
+  }
+
+  hostOnLeave(id) {
+    const p = this.remote.get(id);
+    if (!p) return;
+    if (p.carrier) {
+      p.carrier = false;
+      this.flags[this.enemyOf(p.team)].drop(p.body.pos.clone());
+    }
+    this.feed(`${nameSpan(p)} left the battle`);
+    p.avatar.dispose(this.scene);
+    this.remote.delete(id);
+    this.respawnTimers.delete(p);
+    if (!this.over) this.bots.push(new Bot(this, p.team));
+  }
+
+  _removeBot(team) {
+    const i = this.bots.findIndex(b => b.team === team);
+    if (i < 0) return;
+    const [b] = this.bots.splice(i, 1);
+    this.scene.remove(b.parts.group);
+    this.respawnTimers.delete(b);
+  }
+
+  snapshot() {
+    const ry = yaw => Math.atan2(-Math.cos(yaw), Math.sin(yaw)); // our yaw -> model rotation
+    const P = [['HOST', this.player.team, this.player.name, ...arr(this.player.body.pos),
+      ry(this.player.yaw), Math.round(this.player.health), this.player.alive ? 1 : 0,
+      this.player.carrier ? 1 : 0, this.player.tool, this.player.blocks]];
+    for (const p of this.remote.values())
+      P.push([p.id, p.team, p.name, ...arr(p.body.pos), p.yaw, Math.round(p.health),
+        p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks]);
+    return {
+      t: 's',
+      p: P,
+      b: this.bots.map(b => [b.name, b.team, ...arr(b.body.pos),
+        b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0]),
+      f: {
+        g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
+        b: [FLAG_CODE[this.flags.blue.state], ...arr(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
+      },
+      c: [this.captures.green, this.captures.blue],
+      g: this.grenades.map(g => arr(g.pos)),
+      o: this.over ? 1 : 0,
+    };
+  }
+
+  // ---------------- client networking ----------------
+  clientOnData(d) {
+    if (d.t === 'w') {
+      this.myId = d.id;
+      this.player.team = d.team;
+      this.rebuild(d.seed);
+      for (const e of d.log) {
+        if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]), e[4]);
+        else this.world.set(e[0], e[1], e[2], e[3]);
+      }
+      this.onWelcome?.();
+    } else if (d.t === 's') this._clientSnapshot(d);
+    else if (d.t === 'e') this._clientEvent(d);
+  }
+
+  _clientSnapshot(d) {
+    for (const e of d.p) {
+      const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks] = e;
+      if (id === this.myId) {
+        if (!alive && this.player.alive) this._clientDied();
+        if (health < this._lastHealth) { hud.damage(); sfx.hurt(); }
+        this._lastHealth = health;
+        this.player.health = health;
+        this.player.blocks = blocks;
+        this.player.carrier = !!carrier;
+        hud.health(this.player);
+        if (this.player.tool === 3) hud.refreshTool(this.player);
+        continue;
+      }
+      let av = this.avatars.get(id);
+      if (!av) { av = new Avatar(this.scene, team, name); this.avatars.set(id, av); }
+      av.alive = !!alive;
+      av.push(x, y, z, ry);
+    }
+    const seen = new Set();
+    d.b.forEach((b, i) => {
+      const key = 'b' + i;
+      seen.add(key);
+      let av = this.avatars.get(key);
+      if (!av) { av = new Avatar(this.scene, b[1], b[0]); this.avatars.set(key, av); }
+      av.alive = !!b[6];
+      av.push(b[2], b[3], b[4], b[5]);
+    });
+    for (const [key, av] of this.avatars) {
+      if (key.startsWith('b') && !seen.has(key)) { av.alive = false; av.group.visible = false; }
+    }
+    const stateName = ['home', 'carried', 'dropped'];
+    for (const team of ['green', 'blue']) {
+      const f = d.f[team[0]], flag = this.flags[team];
+      flag.state = stateName[f[0]];
+      flag.pos.set(f[1], f[2], f[3]);
+      flag.dropTimer = f[4];
+    }
+    this.captures.green = d.c[0];
+    this.captures.blue = d.c[1];
+    hud.score(this);
+    if (d.o && !this.over) this._end(d.c[0] >= WIN_SCORE ? 'green' : 'blue');
+    this._lastGrenades = d.g;
+  }
+
+  _clientEvent(d) {
+    switch (d.k) {
+      case 'edit': this.world.set(d.x, d.y, d.z, d.v); break;
+      case 'boom': this.explodeAt(d.x, d.y, d.z, d.r); break;
+      case 'shot':
+        if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f));
+        break;
+      case 'feed': hud.feed(d.html); break;
+      case 'msg':
+        if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
+        break;
+      case 'hit': sfx.hit(); hud.hitmark(); break;
+      case 'died': this._clientDied(); break;
+      case 'spawn':
+        this.player.respawn({ x: d.x, y: d.y, z: d.z });
+        hud.respawn(0); hud.health(this.player); hud.refreshTool(this.player);
+        this._lastHealth = 100;
+        break;
+      case 'end': this._end(d.winner); break;
+    }
+  }
+
+  _clientDied() {
+    this.player.alive = false;
+    sfx.hurt();
+    hud.damage();
+    $('respawn').style.opacity = 1;
+    $('respawn').textContent = 'REDEPLOYING…';
+  }
+
+  _clientUpdate(dt) {
+    if (this.player.alive) this.player.update(dt);
+    for (const av of this.avatars.values()) av.update(this.time);
+    this._sendT -= dt;
+    if (this._sendT <= 0 && this.net) {
+      this._sendT = 1 / 15;
+      const p = this.player;
+      this.net.send({ t: 's', x: p.body.pos.x, y: p.body.pos.y, z: p.body.pos.z,
+        yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool });
+    }
+    for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
+    const g0 = this._lastGrenades?.[0];
+    this.grenadeMesh.visible = !!g0;
+    if (g0) this.grenadeMesh.position.set(g0[0], g0[1], g0[2]);
+    if (this.effects.shake > 0.001) {
+      const s = this.effects.shake;
+      this.camera.position.x += (Math.random() - .5) * s * 0.4;
+      this.camera.position.y += (Math.random() - .5) * s * 0.4;
+      this.camera.rotation.z = (Math.random() - .5) * s * 0.05;
+    }
+    this.effects.update(dt);
   }
 
   // ---------------- main tick ----------------
   update(dt) {
     this.time += dt;
     this.world.animateWater(this.time);
+    if (this.mode === 'client') return this._clientUpdate(dt);
 
     if (this.player.alive) this.player.update(dt);
     for (const b of this.bots) b.update(dt);
@@ -443,6 +792,18 @@ export class Game {
     if (!this.over) {
       this._updateGrenades(dt);
       this._updateFlags(dt);
+    }
+
+    if (this.mode === 'host') {
+      for (const p of this.remote.values()) {
+        p.avatar.alive = p.alive;
+        p.avatar.update(this.time);
+      }
+      this._snapT -= dt;
+      if (this._snapT <= 0) {
+        this._snapT = 1 / 12;
+        this.net.broadcast(this.snapshot());
+      }
     }
 
     // Camera shake rides on top of whatever the player camera did.

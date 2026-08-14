@@ -27,6 +27,18 @@
     border:2px solid rgba(255,255,255,.75); border-radius:4px; cursor:pointer;
     background:rgba(255,255,255,.06); transition:.2s; user-select:none; }
   .play:hover { background:rgba(255,255,255,.18); transform:translateY(-2px); }
+  .play.small { margin-top:0; padding:10px 26px; font-size:15px; }
+  .play.disabled { opacity:.35; pointer-events:none; }
+  .lobbyrow { display:flex; gap:12px; margin-top:18px; align-items:center; }
+  .lobbyrow input { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.3);
+    border-radius:4px; color:#fff; padding:10px 12px; font-size:15px; letter-spacing:2px;
+    text-transform:uppercase; width:110px; text-align:center; outline:none; }
+  .lobbyrow input::placeholder { color:rgba(255,255,255,.35); }
+  #lobbyStatus { margin-top:16px; font-size:14px; letter-spacing:1px; color:#ffd97a;
+    min-height:20px; }
+  #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
+  #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
+  #roomcode b { color:#ffd97a; letter-spacing:4px; }
   .controls { margin-top:34px; font-size:13px; line-height:1.9; opacity:.7; }
   .controls b { display:inline-block; min-width:120px; text-align:right;
     margin-right:14px; color:#ffd97a; font-weight:600; }
@@ -79,6 +91,7 @@
   #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
     font-size:15px; letter-spacing:2px; opacity:0; }
 </style>
+<script src="./vendor/peerjs.min.js"></script>
 <script type="importmap">
   { "imports": { "three": "./vendor/three.module.js" } }
 </script>
@@ -88,6 +101,7 @@
 
   <div id="hud">
     <div id="crosshair"></div><div id="hitmark"></div>
+    <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div class="panel" id="vitals">
       <div id="healthbar"><div id="healthfill"></div></div>
       <div id="healthnum">100 HP</div>
@@ -109,7 +123,14 @@
   <div class="screen" id="menu">
     <div class="title"><span class="ace">THREE</span> <span class="spades">of SPADES</span></div>
     <div class="subtitle">a voxel arena shooter · ace of spades × three.js</div>
-    <div class="play" id="playBtn">CLICK TO DEPLOY</div>
+    <div class="play" id="playBtn">SOLO MISSION</div>
+    <div class="lobbyrow">
+      <div class="play small" id="hostBtn">HOST</div>
+      <div class="play small" id="joinBtn">JOIN</div>
+      <input id="codeInput" maxlength="4" placeholder="CODE">
+      <input id="nameInput" maxlength="12" placeholder="CALLSIGN">
+    </div>
+    <div id="lobbyStatus"></div>
     <div class="controls">
       <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>

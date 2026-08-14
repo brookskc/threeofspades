@@ -81,7 +81,7 @@ export class Player {
     if (this.grenades <= 0 || !this.alive) return;
     this.grenades--;
     sfx.throw_();
-    this.game.throwGrenade(this, this.body.eye(), this.lookDir(), 13);
+    this.game.requestNade(this);
     this.game.hud.refreshTool(this);
   }
 
@@ -207,13 +207,13 @@ export class Player {
 
   _useTool() {
     const t = TOOLS[this.tool];
-    if (t.key === 'spade') return this.game.playerDig(this);
-    if (t.key === 'block') return this.game.playerPlace(this);
+    if (t.key === 'spade') return this.game.requestDig(this);
+    if (t.key === 'block') return this.game.requestPlace(this);
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
     this.recoil = Math.min(1, this.recoil + (t.key === 'rifle' ? 0.9 : 0.35));
     sfx[t.key]();
-    this.game.fireHitscan(this, this.body.eye(), this.lookDir(), t);
+    this.game.requestShoot(this, t);
     this.game.hud.refreshTool(this);
   }
 
@@ -224,11 +224,11 @@ export class Player {
     this.game.onDeath(this, killer);
   }
 
-  respawn() {
-    const p = this.game.spawnPoint(this.team);
+  respawn(at = null) {
+    const p = at ?? this.game.spawnPoint(this.team);
     this.body.pos.set(p.x, p.y, p.z);
     this.body.vel.set(0, 0, 0);
-    this.yaw = 0;
+    this.yaw = this.team === 'green' ? 0 : Math.PI; // face the enemy
     this.pitch = 0;
     this.health = 100;
     this.alive = true;

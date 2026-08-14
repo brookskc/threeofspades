@@ -1,10 +1,12 @@
-// main.js — boot, renderer, sky, menu flow, main loop.
+// main.js — boot, renderer, sky, lobby flow (solo / host / join), main loop.
 import * as THREE from 'three';
 import { Game } from './game.js';
 import { initAudio } from './audio.js';
 import { SX, SZ } from './world.js';
+import { Net, makeCode } from './net.js';
 
 const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -18,7 +20,10 @@ scene.fog = new THREE.Fog(0xcfe4f7, 70, 230);
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 500);
 scene.add(camera); // so the viewmodel renders
 
+// Boots as a solo game — it doubles as the menu's orbiting backdrop.
 const game = new Game(scene, camera, renderer.domElement);
+window.__game = game; // debugging/testing handle
+game.player.vmRoot.visible = false; // hidden until first deploy
 
 // Soft vertical sky gradient, painted once on a canvas.
 function skyGradient() {
@@ -36,25 +41,96 @@ function skyGradient() {
   return tex;
 }
 
-// ---------------- menu / pause flow ----------------
+// ---------------- lobby ----------------
 let playing = false;
+let net = null;
+let roomCode = null;
+const CALLSIGNS = ['Ace', 'Deuce', 'Trey', 'Joker', 'King', 'Queen', 'Jack', 'Ten'];
+
+function callsign() {
+  const v = $('nameInput').value.trim().replace(/[^\w \-]/g, '').slice(0, 12);
+  return v || CALLSIGNS[Math.floor(Math.random() * CALLSIGNS.length)] + Math.floor(Math.random() * 90 + 10);
+}
+function status(html) { $('lobbyStatus').innerHTML = html; }
 
 function setPlaying(v) {
   playing = v;
   $('menu').classList.toggle('hidden', v);
   $('hud').classList.toggle('on', v);
   game.player.vmRoot.visible = v;
+  $('roomcode').style.display = v && roomCode ? 'block' : 'none';
 }
 
-game.player.vmRoot.visible = false; // hidden until first deploy
-
-// ?spectate boots straight into first person (no pointer lock) for testing.
-if (location.search.includes('spectate')) setPlaying(true);
-
-$('playBtn').addEventListener('click', () => {
+function deploy() {
   initAudio();
   renderer.domElement.requestPointerLock();
+}
+
+// --- solo ---
+$('playBtn').addEventListener('click', () => {
+  if (game.mode === 'client' && !game.myId) return; // still connecting
+  deploy();
 });
+
+// --- host a room ---
+$('hostBtn').addEventListener('click', () => {
+  if (net) return;
+  initAudio();
+  game.mode = 'host';
+  game.player.name = callsign();
+  game.rebuild(Math.floor(Math.random() * 1e9));
+  const tryCode = () => {
+    roomCode = params.get('code')?.toUpperCase() ?? makeCode();
+    net = Net.host(roomCode, {
+      onOpen: () => {
+        status(`room code <b>${roomCode}</b> — share it, then deploy`);
+        $('roomcode').querySelector('b').textContent = roomCode;
+        $('playBtn').textContent = 'DEPLOY — START MATCH';
+        if (params.get('auto')) setPlaying(true);
+      },
+      onError: e => {
+        if (e.type === 'unavailable-id' && !params.get('code')) tryCode(); // roll again
+        else status(`network error: ${e.type}`);
+      },
+      onData: (id, d) => game.hostOnData(id, d),
+      onLeave: id => game.hostOnLeave(id),
+    });
+    game.net = net;
+  };
+  tryCode();
+  status('creating room…');
+});
+
+// --- join a room ---
+$('joinBtn').addEventListener('click', () => {
+  if (net) return;
+  const code = $('codeInput').value.trim().toUpperCase();
+  if (code.length !== 4) return status('enter the 4-letter room code');
+  initAudio();
+  game.mode = 'client';
+  game.player.name = callsign();
+  status('connecting…');
+  net = Net.join(code, {
+    onOpen: () => {
+      roomCode = code;
+      $('roomcode').querySelector('b').textContent = code;
+      net.send({ t: 'hi', name: game.player.name });
+    },
+    onData: d => game.clientOnData(d),
+    onClose: () => {
+      status('connection lost — the host left');
+      if (playing) { setPlaying(false); document.exitPointerLock?.(); }
+    },
+    onError: e => status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`),
+  });
+  game.net = net;
+  game.onWelcome = () => {
+    status(`connected — you are <b>${game.player.team.toUpperCase()}</b>`);
+    $('playBtn').textContent = 'DEPLOY';
+    if (params.get('auto')) setPlaying(true);
+  };
+});
+
 $('againBtn').addEventListener('click', () => location.reload());
 
 document.addEventListener('pointerlockchange', () => {
@@ -71,6 +147,15 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// Headless/test hooks: ?mp=host&code=TEST&auto=1 · ?mp=join&code=TEST&auto=1
+if (params.get('mp') === 'host') {
+  $('codeInput').value = '';
+  $('hostBtn').click();
+} else if (params.get('mp') === 'join') {
+  $('codeInput').value = params.get('code') ?? 'TEST';
+  setTimeout(() => $('joinBtn').click(), 800);
+}
 
 // ---------------- loop ----------------
 const clock = new THREE.Clock();
@@ -92,7 +177,7 @@ function frame() {
     );
     camera.lookAt(SX / 2, 24, SZ / 2);
     game.world.animateWater(game.time += dt);
-    for (const f of ['green', 'blue']) game.flags[f].update(dt, game.time);
+    for (const f of ['green', 'blue']) game.flags[f].clientUpdate(game.time);
     game.effects.update(dt);
   }
   renderer.render(scene, camera);
