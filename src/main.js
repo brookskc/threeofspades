@@ -46,6 +46,8 @@ function setPlaying(v) {
   game.player.vmRoot.visible = v;
 }
 
+game.player.vmRoot.visible = false; // hidden until first deploy
+
 // ?spectate boots straight into first person (no pointer lock) for testing.
 if (location.search.includes('spectate')) setPlaying(true);
 
