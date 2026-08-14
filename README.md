@@ -4,7 +4,7 @@
 
 ## ▶ Play now
 
-**[prairielab.net/three-of-spades](https://prairielab.net/three-of-spades/)** — no install, no build, no terminal. Just click.
+**[prairielab.net/threeofspades](https://prairielab.net/threeofspades/)** — no install, no build, no terminal. Just click.
 
 ![Title screen](docs/title.png)
 
@@ -52,8 +52,8 @@ who hunt flags, strafe, and will literally dig through your walls.
 Optional — the live demo above is the same code. But if you want a local copy:
 
 ```sh
-git clone https://github.com/brookskc/three-of-spades.git
-cd three-of-spades
+git clone https://github.com/brookskc/threeofspades.git
+cd threeofspades
 python3 -m http.server 8000   # or: npx serve
 # open http://localhost:8000
 ```
