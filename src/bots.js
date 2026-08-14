@@ -38,6 +38,8 @@ export class Bot {
     this.wanderT = 0;
     this.digT = 0;             // tunneling swing cooldown
     this.lastDig = -9;         // last shovel swing, game time
+    this.face = new THREE.Vector3(this.heading, 0, 0); // where the head points
+    this.memoryT = 0;          // keeps tracking a target just out of sight
     this.responding = false;   // rushing to recover our dropped flag?
     this.deadT = -1;           // corpse tumble timer, while dead
   }
@@ -81,9 +83,12 @@ export class Bot {
     }
     const g = this.game, b = this.body;
 
-    // --- pick something to shoot ---
-    this.target = this._acquire();
-    if (this.target) this.aimT += dt; else this.aimT = 0;
+    // --- pick something to shoot (it has to actually see it first) ---
+    const seen = this._acquire();
+    if (seen !== this.target) this.aimT = 0;    // fresh eyes: reaction time
+    if (seen) { this.target = seen; this.memoryT = 1.2; }
+    else if ((this.memoryT -= dt) <= 0) this.target = null;
+    if (this.target) this.aimT += dt;
 
     // --- movement ---
     const goal = this.goal();
@@ -176,21 +181,34 @@ export class Bot {
     } else if (this.target && this.aimT > 0.35 && this.cooldown <= 0) {
       if (this.ammo <= 0) { this.reloading = GUN.reload; }
       else {
-        this.ammo--;
-        this.cooldown = GUN.interval * (Math.random() < 0.25 ? 4 : 1); // burst rhythm
         const from = b.eye();
-        const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
-        g.fireHitscan(this, from, aim, GUN);
+        const toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
+        // The muzzle only speaks once the head has turned on target — and
+        // opening shots go wide before the aim settles. No 180° no-scopes.
+        if (this.face.dot(toFoe) > 0.87 && g.losClear(from, this.target.body.eye())) {
+          this.ammo--;
+          this.cooldown = GUN.interval * (Math.random() < 0.25 ? 4 : 1); // burst rhythm
+          const err = Math.max(0.015, 0.2 - this.aimT * 0.16);
+          const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
+          aim.x += (Math.random() - .5) * err * 2;
+          aim.y += (Math.random() - .5) * err;
+          aim.z += (Math.random() - .5) * err * 2;
+          g.fireHitscan(this, from, aim.normalize(), GUN);
+        }
       }
     }
 
-    // --- presentation ---
+    // --- presentation: eyes track the fight, but heads take time to turn ---
     const pg = this.parts.group;
     pg.position.copy(b.pos);
-    const face = this.target
+    const want = this.target
       ? new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize()
       : dir;
-    if (face.lengthSq() > 0.01) pg.rotation.y = Math.atan2(-face.x, -face.z);
+    if (want.lengthSq() > 0.01) {
+      const ang = this.face.angleTo(want);
+      if (ang > 1e-3) this.face.lerp(want, Math.min(1, 7 * dt / ang)).normalize();
+    }
+    pg.rotation.y = Math.atan2(-this.face.x, -this.face.z);
     animateSoldier(this.parts, Math.hypot(b.vel.x, b.vel.z), g.time + this.name.length);
   }
 
@@ -202,16 +220,25 @@ export class Bot {
       if (this.body.pos.distanceTo(c.body.pos) < 64 &&
           this.game.losClear(this.body.eye(), c.body.eye())) return c;
     }
-    const foes = this.game.foesOf(this.team);
+    // Everyone else must be in front of you — or close enough to hear.
+    const to = new THREE.Vector3();
     let best = null, bestD = 48;
-    for (const f of foes) {
+    for (const f of this.game.foesOf(this.team)) {
       if (!f.alive) continue;
       const d = this.body.pos.distanceTo(f.body.pos);
-      if (d < bestD && this.game.losClear(this.body.eye(), f.body.eye())) {
-        best = f; bestD = d;
+      if (d >= bestD) continue;
+      if (f !== this.target) { // a target already being tracked stays tracked
+        to.subVectors(f.body.pos, this.body.pos).setY(0).normalize();
+        if (d > 7 && this.face.dot(to) < 0.26) continue; // outside the ~150° cone
       }
+      if (this.game.losClear(this.body.eye(), f.body.eye())) { best = f; bestD = d; }
     }
     return best;
+  }
+
+  // Shot in the back? Whirl toward the shooter — seeing is believing.
+  alert(from) {
+    if (from?.alive) this.face.subVectors(from.body.pos, this.body.pos).setY(0).normalize();
   }
 
   // Shovel a single voxel (debris, edit log, network sync all handled inside).
@@ -237,6 +264,10 @@ export class Bot {
     this.sampleT = 0.4;
     this.digT = 0;
     this.lastDig = -9;
+    this.target = null;
+    this.aimT = 0;
+    this.memoryT = 0;
+    this.face.set(this.heading, 0, 0);
     this.lastPos.copy(this.body.pos);
     this.deadT = -1;
     resetDeath(this.parts);

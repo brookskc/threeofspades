@@ -44,16 +44,21 @@ export class Avatar {
   }
 
   // Death starts the corpse tumble; respawn drops position history so the
-  // avatar snaps to its spawn instead of gliding from the corpse.
+  // avatar snaps to its spawn instead of gliding from the corpse. Respawn
+  // also hides the body until a fresh snapshot places it — otherwise it
+  // stands at the death spot for a frame or two (the mid-map ghost flash).
+  // A brand-new avatar learning its owner is already dead skips the tumble
+  // replay: that corpse fell long before we got here.
   setAlive(alive) {
     if (alive === this.alive) return;
     this.alive = alive;
     if (alive) {
       this.samples.length = 0;
       this.deadAt = null;
+      this.group.visible = false;
       resetDeath(this.parts);
     } else {
-      this.deadAt = performance.now() / 1000;
+      this.deadAt = performance.now() / 1000 - (this.samples.length ? 0 : 2);
     }
   }
 
@@ -61,7 +66,7 @@ export class Avatar {
   update(gameT) {
     const rt = performance.now() / 1000 - 0.13;
     const s = this.samples;
-    if (!s.length) return;
+    if (!s.length) { this.group.visible = false; return; } // nothing valid to show
     let a = s[0], b = s[s.length - 1];
     for (let i = s.length - 1; i >= 0; i--) {
       if (s[i][0] <= rt) { a = s[i]; b = s[Math.min(i + 1, s.length - 1)]; break; }

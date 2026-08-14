@@ -408,6 +408,7 @@ export class Game {
   damage(victim, amount, attacker) {
     if (!victim.alive || this.over) return;
     victim.health -= amount;
+    victim.alert?.(attacker); // bots whirl toward whoever shot them
     if (victim === this.player) { hud.damage(); sfx.hurt(); hud.health(this.player); }
     if (victim.health <= 0) victim.die(attacker);
   }
