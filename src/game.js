@@ -699,7 +699,7 @@ export class Game {
       seen.add(id);
       let av = this.avatars.get(id);
       if (!av) { av = new Avatar(this.scene, team, name); this.avatars.set(id, av); }
-      av.alive = !!alive;
+      av.setAlive(!!alive);
       av.push(x, y, z, ry);
     }
     for (const b of d.b) {
@@ -707,7 +707,7 @@ export class Game {
       seen.add(key);
       let av = this.avatars.get(key);
       if (!av) { av = new Avatar(this.scene, b[2], b[1]); this.avatars.set(key, av); }
-      av.alive = !!b[7];
+      av.setAlive(!!b[7]);
       av.push(b[3], b[4], b[5], b[6]);
     }
     // Anything not in this snapshot is gone (left the room / bot swapped out).
@@ -814,7 +814,7 @@ export class Game {
 
     if (this.mode === 'host') {
       for (const p of this.remote.values()) {
-        p.avatar.alive = p.alive;
+        p.avatar.setAlive(p.alive);
         p.avatar.update(this.time);
       }
       this._snapT -= dt;

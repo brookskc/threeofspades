@@ -26,6 +26,7 @@ export class Avatar {
     this.group = this.parts.group;
     this.group.add(makeNameSprite(name, team));
     parent.add(this.group);
+    this.group.visible = false; // until the first update() places us
     this.samples = []; // [receiptTime, x, y, z, yaw]
     this.alive = true;
     this.pos = new THREE.Vector3();
@@ -34,8 +35,17 @@ export class Avatar {
 
   // ry is model-space rotation.y (soldier forward is -Z).
   push(x, y, z, ry) {
-    this.samples.push([performance.now() / 1000, x, y, z, ry]);
-    if (this.samples.length > 12) this.samples.shift();
+    const s = this.samples, last = s[s.length - 1];
+    // Teleports (respawn, lag stall) snap instead of gliding from the old spot.
+    if (last && Math.hypot(x - last[1], y - last[2], z - last[3]) > 8) s.length = 0;
+    s.push([performance.now() / 1000, x, y, z, ry]);
+    if (s.length > 12) s.shift();
+  }
+
+  // Respawn must not interpolate from the corpse — drop position history.
+  setAlive(alive) {
+    if (alive && !this.alive) this.samples.length = 0;
+    this.alive = alive;
   }
 
   // Render ~130ms in the past, interpolating between bracketing snapshots.
