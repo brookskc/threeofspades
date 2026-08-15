@@ -10,6 +10,7 @@ export const TOOLS = [
     mag: 30, reload: 1.8, auto: true, zoom: 1.35 },
   { key: 'spade', name: 'SPADE', interval: 0.3 },
   { key: 'block', name: 'BLOCK', interval: 0.18 },
+  { key: 'nade', name: 'GRENADE', interval: 0.8 },
 ];
 
 const BASE_FOV = 75;
@@ -50,13 +51,12 @@ export class Player {
       if (e.repeat || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
       if (!this.alive) return;
-      if (e.code >= 'Digit1' && e.code <= 'Digit4')
+      if (e.code >= 'Digit1' && e.code <= 'Digit5')
         this._selectTool(Number(e.code.slice(-1)) - 1);
       if (e.code === 'KeyQ' || e.code === 'KeyE') // cycle back / forward
         this._selectTool((this.tool + (e.code === 'KeyE' ? 1 : -1) + TOOLS.length) % TOOLS.length);
       if (e.code === 'KeyR' && this.tool < 2 && this.ammo[this.tool] < TOOLS[this.tool].mag)
         this._reload();
-      if (e.code === 'KeyF' || e.code === 'KeyG') this._throwGrenade();
       if (e.code === 'Space') this.body.jump();
     });
     addEventListener('keyup', e => (this.keys[e.code] = false));
@@ -87,8 +87,10 @@ export class Player {
   }
 
   _throwGrenade() {
-    if (this.grenades <= 0 || !this.alive) return;
+    if (!this.alive) return;
+    if (this.grenades <= 0) { sfx.click(); return; } // dry — the pin clicks on nothing
     this.grenades--;
+    this.recoil = Math.min(1, this.recoil + 0.35);   // little throwing-arm kick
     sfx.throw_();
     this.game.requestNade(this);
     this.game.hud.refreshTool(this);
@@ -140,6 +142,12 @@ export class Player {
     mk(0.16, 0.16, 0.16, green, 0, 0, -0.3, block);
     mk(0.05, 0.1, 0.06, skin, 0, -0.12, -0.2, block);
     this.vm.block = block;
+
+    const nade = new THREE.Group();
+    mk(0.09, 0.11, 0.09, dark, 0, 0, -0.3, nade);        // body
+    mk(0.03, 0.05, 0.03, dark, 0, 0.07, -0.3, nade);     // spoon
+    mk(0.05, 0.1, 0.06, skin, 0, -0.1, -0.22, nade);     // hand
+    this.vm.nade = nade;
 
     for (const k in this.vm) root.add(this.vm[k]);
     this.vmRoot.position.set(0.28, -0.26, -0.25);
@@ -229,6 +237,7 @@ export class Player {
     const t = TOOLS[this.tool];
     if (t.key === 'spade') { this.swing = 1; return this.game.requestDig(this); }
     if (t.key === 'block') return this.game.requestPlace(this);
+    if (t.key === 'nade') return this._throwGrenade();
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
     this.recoil = Math.min(1, this.recoil + (t.key === 'rifle' ? 0.9 : 0.35));
@@ -267,6 +276,8 @@ export class Player {
     this.health = 100;
     this.alive = true;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
+    this.grenades = 3;      // fresh loadout on every life — a spent belt used
+    this.grenadeRegen = 0;  // to follow you through respawns and map rotations
     this.blocks = 50;
     this.cooldown = 0;
     this.reloading = 0;

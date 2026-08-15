@@ -102,11 +102,12 @@ const hud = {
     const t = TOOLS[p.tool];
     $('toolname').textContent = t.name;
     if (t.key === 'block') $('ammo').innerHTML = `${p.blocks} <small>blocks</small>`;
+    else if (t.key === 'nade') $('ammo').innerHTML = `${p.grenades} <small>grenades</small>`;
     else if (t.key === 'spade') $('ammo').innerHTML = `∞`;
     else $('ammo').innerHTML = p.reloading > 0
       ? `<small>reloading…</small>`
       : `${p.ammo[p.tool]} <small>/ ${t.mag}</small>`;
-    $('toolhint').textContent = `Q·E / 1–4 weapons · F grenade ×${p.grenades} · CTRL crouch`;
+    $('toolhint').textContent = `Q·E / 1–5 weapons · CTRL crouch · R reload`;
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';

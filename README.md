@@ -101,7 +101,8 @@ through a block in 3 shots, an SMG in 7. Cover is temporary.
 `WASD` move · `Space` jump/swim · `Shift` sprint · `CTRL` crouch — slower,
 steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
 taller than one block (single steps still pass, so slopes stay walkable) ·
-`LMB` fire/dig/place · `RMB` aim · `1–4` / `Q`·`E` select tool · `F` grenade ·
+`LMB` fire/dig/place/throw · `RMB` aim · `1–5` / `Q`·`E` select tool (the
+grenade is slot 5 — three per life, one trickles back every 12 s) ·
 `R` reload · `Esc` pause (in a match: resume or back to the main menu)
 
 ## Tech notes
