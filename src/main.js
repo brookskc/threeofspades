@@ -74,6 +74,12 @@ function callsign() {
 }
 function status(html) { $('lobbyStatus').innerHTML = html; }
 
+// The big DEPLOY/RESUME button only exists once there's a session to enter.
+function showPlay(label) {
+  $('playBtn').style.display = 'block';
+  $('playBtn').textContent = label;
+}
+
 function setPlaying(v) {
   playing = v;
   $('menu').classList.toggle('hidden', v);
@@ -120,7 +126,7 @@ function adoptHost(n, code, opts = {}) {
         status(`room code <b>${code}</b> — share it, then deploy`);
         $('roomcode').querySelector('b').textContent = code;
       }
-      $('playBtn').textContent = 'DEPLOY — START MATCH';
+      showPlay('DEPLOY — START MATCH');
       if (params.get('auto')) setPlaying(true);
       opts.onOpen?.();
     },
@@ -150,7 +156,7 @@ function adoptJoin(n, code) {
   n.handlers.onClose = () => {
     netDead = true;
     status('connection lost — the host left');
-    $('playBtn').textContent = 'RETURN TO MENU';
+    showPlay('RETURN TO MENU');
     if (playing) { setPlaying(false); document.exitPointerLock?.(); }
   };
   n.handlers.onError = e => {
@@ -167,7 +173,7 @@ function adoptJoin(n, code) {
   };
   game.onWelcome = () => {
     status(`connected — you are <b>${game.player.team.toUpperCase()}</b>`);
-    $('playBtn').textContent = 'DEPLOY';
+    showPlay('DEPLOY');
     if (params.get('auto')) setPlaying(true);
   };
 }
@@ -246,6 +252,16 @@ $('codeInput').addEventListener('keydown', e => {
 
 $('againBtn').addEventListener('click', () => location.reload());
 
+// Map rotation: the room moves to the next map after each match — hide the
+// end screen and wait at the lobby with DEPLOY ready (pointer lock needs a
+// fresh click anyway).
+game.onRestart = mapName => {
+  $('end').classList.add('hidden');
+  if (playing) setPlaying(false);
+  showPlay('DEPLOY');
+  status(`new map — <b>${mapName}</b>`);
+};
+
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
   if (locked) { setPlaying(true); return; }
@@ -254,7 +270,7 @@ document.addEventListener('pointerlockchange', () => {
   game.player.mouseDown = [false, false, false];
   if (!game.over && !netDead) {
     setPlaying(false);
-    $('playBtn').textContent = 'RESUME';
+    showPlay('RESUME');
   }
 });
 

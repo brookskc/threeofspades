@@ -29,14 +29,24 @@
   .play:hover { background:rgba(255,255,255,.18); transform:translateY(-2px); }
   .play.small { margin-top:0; padding:10px 26px; font-size:15px; }
   .play.accent { margin-top:16px; border-color:#ffd97a; color:#ffd97a;
-    font-size:17px; padding:12px 44px; }
+    font-size:20px; padding:14px 54px; }
   .play.accent:hover { background:rgba(255,217,122,.14); }
   .play.disabled { opacity:.35; pointer-events:none; }
-  .lobbyrow { display:flex; gap:12px; margin-top:18px; align-items:center; }
-  .lobbyrow input { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.3);
-    border-radius:4px; color:#fff; padding:10px 12px; font-size:15px; letter-spacing:2px;
-    text-transform:uppercase; width:110px; text-align:center; outline:none; }
-  .lobbyrow input::placeholder { color:rgba(255,255,255,.35); }
+  #playBtn { display:none; } /* appears once a room is ready, or as RESUME */
+  #nameInput { margin-top:34px; width:280px; padding:13px 14px; font-size:18px;
+    letter-spacing:3px; text-align:center; text-transform:uppercase; color:#fff;
+    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.4);
+    border-radius:4px; outline:none; }
+  #nameInput::placeholder { color:rgba(255,255,255,.38); }
+  #nameInput:focus { border-color:#ffd97a; }
+  .private { margin-top:26px; font-size:13px; letter-spacing:1.5px; opacity:.55; }
+  .private .plink { cursor:pointer; text-decoration:underline;
+    text-underline-offset:3px; }
+  .private .plink:hover { color:#ffd97a; }
+  .private input { width:70px; background:transparent; border:none;
+    border-bottom:1px solid rgba(255,255,255,.4); color:#fff; padding:2px 4px;
+    font-size:13px; letter-spacing:2px; text-transform:uppercase; text-align:center;
+    outline:none; }
   #lobbyStatus { margin-top:16px; font-size:14px; letter-spacing:1px; color:#ffd97a;
     min-height:20px; }
   #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
@@ -129,23 +139,23 @@
 
   <div class="screen" id="menu">
     <div class="title"><span class="ace">THREE</span> <span class="spades">of SPADES</span></div>
-    <div class="subtitle">a voxel arena shooter · ace of spades × three.js</div>
-    <div class="play" id="playBtn">SOLO MISSION</div>
+    <div class="subtitle">a voxel arena shooter made with three.js</div>
+    <input id="nameInput" maxlength="12" placeholder="ENTER CALLSIGN">
+    <div class="play" id="playBtn">DEPLOY</div>
     <div class="play accent" id="quickBtn">QUICK MATCH</div>
-    <div class="lobbyrow">
-      <div class="play small" id="hostBtn">HOST</div>
-      <div class="play small" id="joinBtn">JOIN</div>
-      <input id="codeInput" maxlength="4" placeholder="CODE">
-      <input id="nameInput" maxlength="12" placeholder="CALLSIGN">
-    </div>
     <div id="lobbyStatus"></div>
+    <div class="private">
+      private game — <span class="plink" id="hostBtn">host</span> &nbsp;·&nbsp;
+      code <input id="codeInput" maxlength="4" placeholder="····">
+      <span class="plink" id="joinBtn">join</span>
+    </div>
     <div class="controls">
       <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 4 · Q · E</b> rifle · smg · spade · block &nbsp;·&nbsp; <b>F</b> grenade &nbsp;·&nbsp; <b>R</b> reload</div>
       <div><b>C</b> crouch — slower but steadier aim</div>
       <div><b>MISSION</b> steal the enemy flag, bring it home — first to 3 captures wins</div>
-      <div><b>QUICK MATCH</b> auto-joins a public room with strangers — up to 8 players</div>
+      <div><b>QUICK MATCH</b> drops you into the fullest public room with space — up to 8 players</div>
     </div>
   </div>
 

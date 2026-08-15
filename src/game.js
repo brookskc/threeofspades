@@ -2,7 +2,7 @@
 // Modes: 'solo' (local only), 'host' (authoritative, broadcasts), 'client' (thin).
 import * as THREE from 'three';
 import { VoxelWorld, SEA, BLOCK, PALETTE } from './world.js';
-import { generateMap, BASE } from './mapgen.js';
+import { generateMap, BASE, MAPS } from './mapgen.js';
 import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
 import { Effects } from './effects.js';
@@ -219,7 +219,8 @@ export class Game {
     this._lastHealth = 100;
 
     this.world = new VoxelWorld(scene);
-    generateMap(this.world, this.seed);
+    this.mapIndex = 0;                   // MAPS rotation position
+    generateMap(this.world, this.seed, this.mapIndex);
     this.effects = new Effects(scene);
     this.bots = [];                        // before Player: its first spawnPoint reads these
     this.player = new Player(this, camera, dom);
@@ -243,16 +244,17 @@ export class Game {
     hud.score(this);
   }
 
-  // Tear down and regenerate on a new seed (host room start / client welcome).
-  rebuild(seed) {
+  // Tear down and regenerate (host room start / client welcome / map rotation).
+  rebuild(seed, map = this.mapIndex) {
     this.world.dispose();
     for (const b of this.bots) disposeObject(b.parts.group);
     for (const av of this.avatars.values()) av.dispose();
     this.avatars.clear();
     for (const t of ['green', 'blue']) this.flags[t].dispose();
     this.seed = seed;
+    this.mapIndex = map;
     this.world = new VoxelWorld(this.scene);
-    generateMap(this.world, seed);
+    generateMap(this.world, seed, map);
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.bots = [];
     if (this.mode !== 'client') this._spawnBots();
@@ -372,6 +374,11 @@ export class Game {
       else if (shooter.isRemote) this.net.sendTo(shooter.id, { t: 'e', k: 'hit' });
       this.damage(hit, dmg, shooter);
     }
+
+    // Gunfire demolishes blocks: whatever voxel stopped the bullet is removed
+    // (fireHitscan only ever runs on the host/solo side, so this stays
+    // authoritative and reaches clients through the edit broadcast).
+    if (voxel) this.applyEdit(voxel.x, voxel.y, voxel.z, 0);
   }
 
   // Tracer + impact particles + report sound (shared by local sim and net replay).
@@ -603,10 +610,23 @@ export class Game {
     const won = winner === this.player.team;
     $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
     $('endTitle').style.color = won ? '#8fd98f' : '#e74c3c';
+    const next = MAPS[(this.mapIndex + 1) % MAPS.length].name;
     $('endDetail').textContent =
-      `${winner.toUpperCase()} wins ${this.captures.green} — ${this.captures.blue}`;
+      `${winner.toUpperCase()} wins ${this.captures.green} — ${this.captures.blue}` +
+      ` · next up: ${next}`;
     $('end').classList.remove('hidden');
     if (!won) sfx.lose();
+    // The room rotates maps on its own a few seconds after the final capture.
+    if (this.mode !== 'client') this._rotateT = 7;
+  }
+
+  _rotate() {
+    const map = (this.mapIndex + 1) % MAPS.length;
+    const seed = Math.floor(Math.random() * 1e9);
+    if (this.mode === 'host')
+      this.net.broadcast({ t: 'e', k: 'restart', map, seed });
+    this.rebuild(seed, map);
+    this.onRestart?.(MAPS[map].name);
   }
 
   // ---------------- host networking ----------------
@@ -655,7 +675,7 @@ export class Game {
     const proxy = new RemoteProxy(this, id, name, team);
     this.remote.set(id, proxy);
     this._removeBot(team);
-    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, log: this.editLog });
+    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog });
     this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
   }
 
@@ -711,7 +731,7 @@ export class Game {
     if (d.t === 'w') {
       this.myId = d.id;
       this.player.team = d.team;
-      this.rebuild(d.seed);
+      this.rebuild(d.seed, d.map ?? 0);
       for (const e of d.log) {
         if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]), e[4]);
         else this.world.set(e[0], e[1], e[2], e[3]);
@@ -788,6 +808,10 @@ export class Game {
         this._lastHealth = 100;
         break;
       case 'end': this._end(d.winner); break;
+      case 'restart':
+        this.rebuild(d.seed, d.map);
+        this.onRestart?.(MAPS[d.map].name);
+        break;
     }
   }
 
@@ -854,6 +878,9 @@ export class Game {
     if (!this.over) {
       this._updateGrenades(dt);
       this._updateFlags(dt);
+    } else if (this._rotateT != null) {
+      this._rotateT -= dt;
+      if (this._rotateT <= 0) { this._rotateT = null; this._rotate(); }
     }
 
     if (this.mode === 'host') {
