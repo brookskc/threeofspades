@@ -90,6 +90,10 @@ seed:
 | **PINEFALL** | Dense pine forest cut by a wide winding creek. Short sightlines, flanking routes, ambush country. |
 | **DUNES** | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. |
 
+| ![GREENBELT](docs/map-greenbelt.png) | ![BEACHHEAD](docs/map-beachhead.png) |
+|---|---|
+| ![PINEFALL](docs/map-pinefall.png) | ![DUNES](docs/map-dunes.png) |
+
 The home screen shows them off itself — the menu backdrop is a slow orbit that
 cycles through all four maps, thirty seconds apiece, each with a fresh seed.
 
@@ -117,8 +121,8 @@ taller than one block (single steps still pass, so slopes stay walkable) ·
 `LMB` fire/dig/place/throw · `RMB` aim · `1–5` / `Q`·`E` select tool (the
 grenade is slot 5 — three per life, one trickles back every 12 s) ·
 `R` reload · `T` / `Y` chat the room / your team · `Esc` pause (in a match:
-resume or back to the main menu). Death costs you **10 seconds** on the
-redeploy timer — make them count.
+resume or back to the main menu). Death costs **10 seconds** on the redeploy
+timer — for humans *and* bots, so clearing a base actually clears it.
 
 ## Tech notes
 

@@ -11,6 +11,7 @@ import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
+const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
 // A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
 // blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
 // 7 shots, bot carbine 16 -> 10). The spade still digs in one hit.
@@ -574,11 +575,10 @@ export class Game {
     if (killer && killer !== victim) hud.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
     else hud.feed(`${nameSpan(victim)} blew up`);
 
-    // Humans wait out a real redeploy timer; bots cycle faster to keep the
-    // field populated.
-    const t = (victim === this.player || victim.isRemote) ? 10 : 4;
-    this.respawnTimers.set(victim, t);
-    if (victim === this.player) hud.respawn(t);
+    // Everyone waits out the same redeploy timer — bots too, or a raid on
+    // the enemy base would face a fresh wave every few seconds.
+    this.respawnTimers.set(victim, REDEPLOY);
+    if (victim === this.player) hud.respawn(REDEPLOY);
   }
 
   // ---------------- block tools ----------------
@@ -865,7 +865,7 @@ export class Game {
         bot.alive = false;
         bot.deadT = 1.5; // corpse already finished tumbling on our screen
         bot.parts.group.visible = false;
-        this.respawnTimers.set(bot, 4);
+        this.respawnTimers.set(bot, REDEPLOY);
       }
       this.bots.push(bot);
     }
@@ -882,7 +882,7 @@ export class Game {
     }
     // A death mid-handover still gets its respawn; a finished match still
     // gets its rotation.
-    if (!this.player.alive) this.respawnTimers.set(this.player, 4);
+    if (!this.player.alive) this.respawnTimers.set(this.player, REDEPLOY);
     if (this.over) this._rotateT = 2;
     // Stragglers get a minute to find the new room before their roster entry
     // lapses and any later knock is treated as a fresh join.
@@ -901,7 +901,7 @@ export class Game {
     proxy.tool = tool;
     proxy.blocks = blocks;
     proxy.crouched = !!crouch;
-    if (!proxy.alive) this.respawnTimers.set(proxy, 4);
+    if (!proxy.alive) this.respawnTimers.set(proxy, REDEPLOY);
     this.remote.set(id, proxy);
     return proxy;
   }
