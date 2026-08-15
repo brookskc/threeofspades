@@ -6,8 +6,11 @@ const PREFIX = 'threeofspades-' + (ns ? ns + '-' : '');
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 // Quick-match rendezvous: deterministic public room ids. Private codes are
-// drawn from an alphabet without digits, so 'PUB0'…'PUB7' can never collide.
-export const PUBLIC_SLOTS = 8;
+// drawn from an alphabet without digits, so 'PUB0'…'PUB15' can never collide.
+// Slots are scanned one page at a time: quiet hours cost one 8-slot probe,
+// peak hours spill into the next page instead of bouncing players off a cap.
+export const PUBLIC_SLOTS = 8;   // slots per scan page
+export const PUBLIC_PAGES = 2;   // 16 slots = 128 concurrent quick-matchers
 export const slotCode = i => 'PUB' + i;
 
 export function makeCode() {
@@ -175,40 +178,45 @@ export class Net {
     });
     try { await ready; } catch { guest.destroy(); return { kind: 'down' }; }
     try {
-      const results = await Promise.all(
-        Array.from({ length: PUBLIC_SLOTS }, (_, i) =>
-          Net._probe(guest, slotCode(i), timeoutMs).then(p => ({ slot: i, p }))));
-      const open = [], dead = [];
-      for (const { slot, p } of results) {
-        console.debug(`[qm] probe ${slotCode(slot)} -> ${p.kind}${p.kind === 'room' ? ` ${p.humans}/${p.max}` : ''}`);
-        if (p.kind === 'room') { if (p.humans < p.max) open.push({ slot, humans: p.humans }); }
-        else if (p.kind === 'dead') dead.push(slot);
-        else { guest.destroy(); return { kind: 'down' }; }
-      }
-      // Fullest first, ties to the lowest slot number.
-      open.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
-      for (const room of open) {
-        const k = await Net._knock(guest, slotCode(room.slot), name, timeoutMs);
-        console.debug(`[qm] knock ${slotCode(room.slot)} -> ${k.kind}`);
-        if (k.kind === 'join')
-          return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: room.slot, welcome: k.welcome };
-        if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
-        // 'full'/'dead': lost a race — try the next room
-      }
-      for (const i of dead) {
-        const c = await Net._claim(slotCode(i), timeoutMs);
-        console.debug(`[qm] claim ${slotCode(i)} -> ${c.kind}`);
-        if (c.kind === 'host') { guest.destroy(); return { kind: 'host', net: c.net, slot: i }; }
-        if (c.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
-        // 'taken': the probe said dead but the id is registered — the broker
-        // never lies about that, so the probe was a false negative (slow net).
-        // Give a proven-live room one direct knock before moving on.
-        const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
-        console.debug(`[qm] knock ${slotCode(i)} (taken) -> ${k.kind}`);
-        if (k.kind === 'join')
-          return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: i, welcome: k.welcome };
-        if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
-        // 'full'/'dead': genuinely unavailable — try the next dead slot
+      // Page through the slots: later pages are only probed once every
+      // earlier room is full, so ordinary load costs one cheap page.
+      for (let page = 0; page < PUBLIC_PAGES; page++) {
+        const results = await Promise.all(
+          Array.from({ length: PUBLIC_SLOTS }, (_, i) => page * PUBLIC_SLOTS + i)
+            .map(i => Net._probe(guest, slotCode(i), timeoutMs).then(p => ({ slot: i, p }))));
+        const open = [], dead = [];
+        for (const { slot, p } of results) {
+          console.debug(`[qm] probe ${slotCode(slot)} -> ${p.kind}${p.kind === 'room' ? ` ${p.humans}/${p.max}` : ''}`);
+          if (p.kind === 'room') { if (p.humans < p.max) open.push({ slot, humans: p.humans }); }
+          else if (p.kind === 'dead') dead.push(slot);
+          else { guest.destroy(); return { kind: 'down' }; }
+        }
+        // Fullest first, ties to the lowest slot number.
+        open.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
+        for (const room of open) {
+          const k = await Net._knock(guest, slotCode(room.slot), name, timeoutMs);
+          console.debug(`[qm] knock ${slotCode(room.slot)} -> ${k.kind}`);
+          if (k.kind === 'join')
+            return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: room.slot, welcome: k.welcome };
+          if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
+          // 'full'/'dead': lost a race — try the next room
+        }
+        for (const i of dead) {
+          const c = await Net._claim(slotCode(i), timeoutMs);
+          console.debug(`[qm] claim ${slotCode(i)} -> ${c.kind}`);
+          if (c.kind === 'host') { guest.destroy(); return { kind: 'host', net: c.net, slot: i }; }
+          if (c.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
+          // 'taken': the probe said dead but the id is registered — the broker
+          // never lies about that, so the probe was a false negative (slow net).
+          // Give a proven-live room one direct knock before moving on.
+          const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
+          console.debug(`[qm] knock ${slotCode(i)} (taken) -> ${k.kind}`);
+          if (k.kind === 'join')
+            return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: i, welcome: k.welcome };
+          if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
+          // 'full'/'dead': genuinely unavailable — try the next dead slot
+        }
+        // Every room on this page was full — fall through to the next page.
       }
       guest.destroy();
       return { kind: 'full-all' };

@@ -69,10 +69,22 @@ let net = null;
 let roomCode = null;
 const CALLSIGNS = ['Ace', 'Deuce', 'Trey', 'Joker', 'King', 'Queen', 'Jack', 'Ten'];
 
-function callsign() {
-  const v = $('nameInput').value.trim().replace(/[^\w \-]/g, '').slice(0, 12);
-  return v || CALLSIGNS[Math.floor(Math.random() * CALLSIGNS.length)] + Math.floor(Math.random() * 90 + 10);
+function rawName() {
+  return $('nameInput').value.trim().replace(/[^\w \-]/g, '').slice(0, 12);
 }
+function callsign() {
+  return rawName() || CALLSIGNS[Math.floor(Math.random() * CALLSIGNS.length)] + Math.floor(Math.random() * 90 + 10);
+}
+// No anonymous soldiers: every lobby action needs a callsign first, so the
+// name above your head means something to the people shooting at you.
+function requireName() {
+  if (rawName()) return true;
+  status('enter a callsign first — your squad needs to know you');
+  $('nameInput').classList.add('need');
+  $('nameInput').focus();
+  return false;
+}
+$('nameInput').addEventListener('input', () => $('nameInput').classList.remove('need'));
 function status(html) { $('lobbyStatus').innerHTML = html; }
 
 // The big DEPLOY/RESUME button only exists once there's a session to enter.
@@ -160,7 +172,7 @@ function adoptJoin(n, code) {
   window.__net = n;
   roomCode = code;
   game.net = n;
-  const pub = /^PUB(\d)$/.exec(code); // public slots show as "PUBLIC n"
+  const pub = /^PUB(\d+)$/.exec(code); // public slots show as "PUBLIC n"
   $('roomcode').querySelector('b').textContent = pub ? `PUBLIC ${+pub[1] + 1}` : code;
   n.handlers.onData = d => game.clientOnData(d);
   n.handlers.onClose = () => {
@@ -193,6 +205,7 @@ function adoptJoin(n, code) {
 
 $('hostBtn').addEventListener('click', () => {
   if (net || matchmaking) return;
+  if (!requireName()) return;
   initAudio();
   game.mode = 'host';
   game.player.name = callsign();
@@ -209,6 +222,7 @@ $('joinBtn').addEventListener('click', () => {
   if (net || matchmaking) return;
   const code = $('codeInput').value.trim().toUpperCase();
   if (code.length !== 4) return status('enter the 4-letter room code');
+  if (!requireName()) return;
   initAudio();
   game.mode = 'client';
   game.player.name = callsign();
@@ -243,6 +257,7 @@ function bailToMenu() {
 
 $('quickBtn').addEventListener('click', async () => {
   if (net || matchmaking) return;
+  if (!requireName()) return;
   matchmaking = true;
   searchCanceled = false;
   initAudio();
@@ -335,6 +350,9 @@ addEventListener('resize', () => {
 
 // Headless/test hooks: ?mp=host&code=TEST&auto=1 · ?mp=join&code=TEST&auto=1
 // ?mp=quick&auto=1&ns=<namespace> · host cap override: &cap=2
+// Auto runs can't type, so they get a callsign to satisfy the lobby gate.
+if (params.get('auto') && !rawName())
+  $('nameInput').value = 'TEST' + Math.floor(Math.random() * 90 + 10);
 if (params.get('mp') === 'host') {
   $('codeInput').value = '';
   $('hostBtn').click();

@@ -25,7 +25,8 @@ back in if someone leaves.
 Real browser-to-browser multiplayer over WebRTC — no server, no install, works
 straight from GitHub Pages.
 
-**QUICK MATCH is the front door.** Type a callsign, click once, and you're
+**QUICK MATCH is the front door.** Type a callsign (required — no anonymous
+soldiers), click once, and you're
 in — a searching ticker holds the menu while matchmaking runs, then the menu
 drops away straight into the match (no second click, no DEPLOY gate; `Esc`
 cancels the search). It peeks at a small set of deterministic public slots, then joins the
@@ -34,6 +35,10 @@ instead of scattering across empty ones. If no room is open, it quietly claims
 a slot and hosts one for the next quick-matcher to find. Rooms are capped at
 **8 human players**, with humans always split across opposing teams (you fight
 *each other*, not side-by-side against bots).
+
+Every soldier — human or bot — wears its callsign on a floating nametag,
+tinted by team and occluded by terrain just like the body beneath it, so you
+can tell your buddy from your enemy before you pull the trigger.
 
 Want a private lobby instead? The small `host` / `join` links under the main
 button give you a 4-letter room code to share with friends.
@@ -53,10 +58,11 @@ leaves the peers.
   hosted by a player in it, so 10 rooms or 10,000 rooms cost the project
   nothing. The only shared infrastructure is the free PeerJS signaling broker,
   which handles brief introductions, not gameplay.
-- **Quick-match pool:** 8 public slots × 8 seats = **64 concurrent
-  quick-matchers** before the pool reports full (one constant in `src/net.js`
-  raises it). Private rooms use 32⁴ ≈ 1.05M possible codes, each an
-  independent battlefield.
+- **Quick-match pool:** 16 public slots × 8 seats = **128 concurrent
+  quick-matchers**. Slots are scanned a page of 8 at a time, so the overflow
+  page only costs anything when the first page is genuinely full (`PUBLIC_PAGES`
+  in `src/net.js` raises it further). Private rooms use 32⁴ ≈ 1.05M possible
+  codes, each an independent battlefield.
 
 ## Maps
 

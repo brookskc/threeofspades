@@ -1,6 +1,6 @@
 // bots.js — AI soldiers: they hunt the flag, fight back, and dig through walls.
 import * as THREE from 'three';
-import { Body, makeSoldier, animateSoldier, animateDeath, resetDeath } from './entities.js';
+import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath } from './entities.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
@@ -20,6 +20,7 @@ export class Bot {
     const p = game.spawnPoint(team);
     this.body = new Body(game.world, p.x, p.y, p.z);
     this.parts = makeSoldier(team === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
+    this.parts.group.add(makeNametag(this.name, team)); // know your enemy
     game.scene.add(this.parts.group);
     this.health = 100;
     this.alive = true;

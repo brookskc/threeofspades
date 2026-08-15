@@ -167,6 +167,11 @@ const hud = {
 const nameSpan = e =>
   `<span style="color:${e.team === 'blue' ? '#8fa8ee' : '#8fd98f'}">${e.name}</span>`;
 
+// Names arrive over the network and land in HTML (kill feed) and canvas
+// (nametags): keep them to the same alphabet the callsign box enforces.
+const cleanName = n =>
+  String(n ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'Player';
+
 // A network player as the host sees them: client-authoritative position,
 // host-authoritative health, flags, and respawns.
 class RemoteProxy {
@@ -662,7 +667,7 @@ export class Game {
     }
     if (d.t === 'hi') {
       if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
-      return this._hostAddPlayer(id, d.name);
+      return this._hostAddPlayer(id, cleanName(d.name));
     }
     const p = this.remote.get(id);
     if (!p) return;
@@ -782,7 +787,7 @@ export class Game {
       }
       seen.add(id);
       let av = this.avatars.get(id);
-      if (!av) { av = new Avatar(this.scene, team, name); this.avatars.set(id, av); }
+      if (!av) { av = new Avatar(this.scene, team, cleanName(name)); this.avatars.set(id, av); }
       av.setAlive(!!alive);
       av.setCrouch(!!crouch);
       av.push(x, y, z, ry);

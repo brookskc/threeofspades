@@ -1,30 +1,13 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
-import { makeSoldier, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch } from './entities.js';
-
-function makeNameSprite(name, team) {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 56;
-  const g = c.getContext('2d');
-  g.font = '700 30px system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.shadowColor = 'rgba(0,0,0,.8)';
-  g.shadowBlur = 6;
-  g.fillStyle = team === 'blue' ? '#a8bcff' : '#b5ecb5';
-  g.fillText(name, 128, 38);
-  const tex = new THREE.CanvasTexture(c);
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
-  s.scale.set(2.2, 0.48, 1);
-  s.position.y = 2.15;
-  return s;
-}
+import { makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch } from './entities.js';
 
 export class Avatar {
   constructor(parent, team, name) {
     this.team = team;
     this.parts = makeSoldier(team === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
     this.group = this.parts.group;
-    this.group.add(makeNameSprite(name, team));
+    this.group.add(makeNametag(name, team));
     parent.add(this.group);
     this.group.visible = false; // until the first update() places us
     this.samples = []; // [receiptTime, x, y, z, yaw]

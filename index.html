@@ -39,6 +39,8 @@
     border-radius:4px; outline:none; }
   #nameInput::placeholder { color:rgba(255,255,255,.38); }
   #nameInput:focus { border-color:#ffd97a; }
+  #nameInput.need { border-color:#ff6a5a; animation:needpulse .45s 3; }
+  @keyframes needpulse { 50% { box-shadow:0 0 16px rgba(255,90,74,.85); } }
   .private { margin-top:26px; font-size:13px; letter-spacing:1.5px; opacity:.55; }
   .private .plink { cursor:pointer; text-decoration:underline;
     text-underline-offset:3px; }

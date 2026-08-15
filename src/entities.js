@@ -117,6 +117,27 @@ export function makeSoldier(teamColor) {
   return { group: g, legL, legR, armL, armR, head, torso, gun, blob, brim };
 }
 
+// A floating callsign: crisp canvas sprite riding above the helmet. It's an
+// ordinary depth-tested scene object, so terrain occludes it exactly when the
+// soldier underneath is hidden — you never read a name through a hill.
+export function makeNametag(name, team) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 56;
+  const g2 = c.getContext('2d');
+  g2.font = '700 30px system-ui, sans-serif';
+  g2.textAlign = 'center';
+  g2.shadowColor = 'rgba(0,0,0,.8)';
+  g2.shadowBlur = 6;
+  g2.fillStyle = team === 'blue' ? '#a8bcff' : '#b5ecb5';
+  g2.fillText(name, 128, 38);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), depthWrite: false,
+  }));
+  s.scale.set(2.2, 0.48, 1);
+  s.position.y = 2.15;
+  return s;
+}
+
 // Crouch pose: legs squash, everything above the hips drops. The collision
 // body still spans the same two voxel rows, so standing back up can never
 // wedge the soldier into a ceiling.
