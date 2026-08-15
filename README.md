@@ -26,10 +26,10 @@ straight from GitHub Pages:
 2. **Friends** enter the code and a callsign, click `JOIN`, then deploy.
 
 Or skip the codes entirely: **QUICK MATCH** drops you into a public room with
-strangers. It knocks on a small set of deterministic public slots
-(lowest-numbered first, so players pile into the same rooms), joins the first
-one with space — and if none are open, it quietly claims a slot and hosts it
-for the next quick-matcher to find. Rooms are capped at **8 human players**.
+strangers. It peeks at a small set of deterministic public slots, then joins
+the **fullest room that still has space** (so players pile into the same games)
+— and if none are open, it quietly claims a slot and hosts it for the next
+quick-matcher to find. Rooms are capped at **8 human players**.
 
 The host's browser runs the authoritative match (bots, flags, damage, grenades,
 terrain edits); everyone else connects directly to it over a peer-to-peer data
@@ -52,8 +52,9 @@ that, gameplay traffic never leaves the peers.
 
 ### Controls
 
-`WASD` move · `Space` jump/swim · `Shift` sprint · `LMB` fire/dig/place ·
-`RMB` aim · `1–4` select tool · `G` grenade · `R` reload · `Esc` pause
+`WASD` move · `Space` jump/swim · `Shift` sprint · `C` crouch (steadier aim) ·
+`LMB` fire/dig/place · `RMB` aim · `1–4` / `Q`·`E` select tool · `F` grenade ·
+`R` reload · `Esc` pause
 
 ## Tech notes
 

@@ -1,6 +1,6 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
-import { makeSoldier, animateSoldier, animateDeath, resetDeath, disposeObject } from './entities.js';
+import { makeSoldier, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch } from './entities.js';
 
 function makeNameSprite(name, team) {
   const c = document.createElement('canvas');
@@ -29,6 +29,7 @@ export class Avatar {
     this.group.visible = false; // until the first update() places us
     this.samples = []; // [receiptTime, x, y, z, yaw]
     this.alive = true;
+    this.crouch = false;
     this.deadAt = null;  // wall-clock time of death, while the corpse tumbles
     this.pos = new THREE.Vector3();
     this.yaw = 0;
@@ -62,6 +63,8 @@ export class Avatar {
     }
   }
 
+  setCrouch(on) { this.crouch = on; }
+
   // Render ~130ms in the past, interpolating between bracketing snapshots.
   update(gameT) {
     const rt = performance.now() / 1000 - 0.13;
@@ -90,6 +93,7 @@ export class Avatar {
     this.group.visible = true;
     this.group.rotation.y = a[4] + dry * k;
     animateSoldier(this.parts, speed, gameT + this.pos.x);
+    setCrouch(this.parts, this.crouch);
   }
 
   dispose() { disposeObject(this.group); }

@@ -102,7 +102,7 @@ const hud = {
     else $('ammo').innerHTML = p.reloading > 0
       ? `<small>reloading…</small>`
       : `${p.ammo[p.tool]} <small>/ ${t.mag}</small>`;
-    $('toolhint').textContent = `1 rifle · 2 smg · 3 spade · 4 block · G grenade ×${p.grenades}`;
+    $('toolhint').textContent = `Q·E / 1–4 weapons · F grenade ×${p.grenades} · C crouch`;
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';
@@ -333,7 +333,7 @@ export class Game {
 
   // ---------------- combat ----------------
   fireHitscan(shooter, from, dir, spec) {
-    const spread = spec.spread ?? 0;
+    const spread = (spec.spread ?? 0) * (shooter.crouched ? 0.35 : 1); // crouch steadies aim
     const d = dir.clone()
       .add(new THREE.Vector3((Math.random() - .5) * spread * 2,
                              (Math.random() - .5) * spread * 2,
@@ -611,6 +611,11 @@ export class Game {
 
   // ---------------- host networking ----------------
   hostOnData(id, d) {
+    // Matchmaking probe: answer on the same channel, before any join logic.
+    if (d.t === 'ping') {
+      this.net.sendTo(id, { t: 'pong', humans: this.remote.size + 1, max: MAX_HUMANS });
+      return;
+    }
     if (d.t === 'hi') {
       if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
       return this._hostAddPlayer(id, d.name);
@@ -621,6 +626,7 @@ export class Game {
       p.body.pos.set(d.x, d.y, d.z);
       p.tool = d.tool;
       p.yaw = d.yaw;
+      p.crouched = !!d.c;
       p.avatar.push(d.x, d.y, d.z, d.yaw);
     } else if (d.t === 'a' && p.alive && !this.over) {
       const o = v3(d.o), dir = v3(d.d).normalize();
@@ -679,10 +685,11 @@ export class Game {
     const ry = yaw => Math.atan2(-Math.cos(yaw), Math.sin(yaw)); // our yaw -> model rotation
     const P = [['HOST', this.player.team, this.player.name, ...arr(this.player.body.pos),
       ry(this.player.yaw), Math.round(this.player.health), this.player.alive ? 1 : 0,
-      this.player.carrier ? 1 : 0, this.player.tool, this.player.blocks]];
+      this.player.carrier ? 1 : 0, this.player.tool, this.player.blocks,
+      this.player.crouched ? 1 : 0]];
     for (const p of this.remote.values())
       P.push([p.id, p.team, p.name, ...arr(p.body.pos), p.yaw, Math.round(p.health),
-        p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks]);
+        p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks, p.crouched ? 1 : 0]);
     return {
       t: 's',
       p: P,
@@ -717,7 +724,7 @@ export class Game {
   _clientSnapshot(d) {
     const seen = new Set();
     for (const e of d.p) {
-      const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks] = e;
+      const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = e;
       if (id === this.myId) {
         if (!alive && this.player.alive) this._clientDied();
         if (health < this._lastHealth) { hud.damage(); sfx.hurt(); }
@@ -733,6 +740,7 @@ export class Game {
       let av = this.avatars.get(id);
       if (!av) { av = new Avatar(this.scene, team, name); this.avatars.set(id, av); }
       av.setAlive(!!alive);
+      av.setCrouch(!!crouch);
       av.push(x, y, z, ry);
     }
     for (const b of d.b) {
@@ -800,7 +808,8 @@ export class Game {
       this._sendT = 1 / 15;
       const p = this.player;
       this.net.send({ t: 's', x: p.body.pos.x, y: p.body.pos.y, z: p.body.pos.z,
-        yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool });
+        yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool,
+        c: p.crouched ? 1 : 0 });
     }
     for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
     const g0 = this._lastGrenades?.[0];
@@ -850,6 +859,7 @@ export class Game {
     if (this.mode === 'host') {
       for (const p of this.remote.values()) {
         p.avatar.setAlive(p.alive);
+        p.avatar.setCrouch?.(!!p.crouched);
         p.avatar.update(this.time);
       }
       this._snapT -= dt;

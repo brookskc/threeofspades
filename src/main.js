@@ -200,9 +200,10 @@ $('joinBtn').addEventListener('click', () => {
 });
 
 // --- quick match: drop into a public room with strangers ---
-// Net.quickScan walks the public slots lowest-first over a single signaling
-// socket: knock on each, join the first with space, or claim the first dead
-// slot and host it — the next quick-matcher then finds you.
+// Net.quickScan probes the public slots over a single signaling socket, joins
+// the fullest room that still has space, or claims a dead slot and hosts it —
+// the next quick-matcher then finds you. If every room is full we wait a beat
+// and scan once more: rooms churn fast, and a probe may have raced a join.
 // ?qmt=30000 stretches per-step timeouts (CI/very slow networks).
 const qmTimeout = parseInt(params.get('qmt'), 10) || 9000;
 $('quickBtn').addEventListener('click', async () => {
@@ -212,7 +213,12 @@ $('quickBtn').addEventListener('click', async () => {
   game.player.name = callsign();
   status('searching for a public room…');
   try {
-    const r = await Net.quickScan(game.player.name, qmTimeout);
+    let r = await Net.quickScan(game.player.name, qmTimeout);
+    if (r.kind === 'full-all') { // one retry: a room may have just opened up
+      status('all rooms full — rescanning…');
+      await new Promise(res => setTimeout(res, 1500));
+      r = await Net.quickScan(game.player.name, qmTimeout);
+    }
     if (r.kind === 'join') {
       game.mode = 'client';
       adoptJoin(r.net, slotCode(r.slot));

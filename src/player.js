@@ -36,6 +36,8 @@ export class Player {
     this.reloading = 0;
     this.bob = 0;
     this.recoil = 0;
+    this.swing = 0; // spade chop animation
+    this.crouched = false; // hold C: slower, steadier aim
     this.carrier = false; // carrying the enemy flag?
 
     this._buildViewmodel();
@@ -48,16 +50,13 @@ export class Player {
       if (e.repeat || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
       if (!this.alive) return;
-      if (e.code >= 'Digit1' && e.code <= 'Digit4') {
-        this.tool = Number(e.code.slice(-1)) - 1;
-        this.reloading = 0;
-        sfx.click();
-        this._syncViewmodel();
-        this.game.hud.refreshTool(this);
-      }
+      if (e.code >= 'Digit1' && e.code <= 'Digit4')
+        this._selectTool(Number(e.code.slice(-1)) - 1);
+      if (e.code === 'KeyQ' || e.code === 'KeyE') // cycle back / forward
+        this._selectTool((this.tool + (e.code === 'KeyE' ? 1 : -1) + TOOLS.length) % TOOLS.length);
       if (e.code === 'KeyR' && this.tool < 2 && this.ammo[this.tool] < TOOLS[this.tool].mag)
         this._reload();
-      if (e.code === 'KeyG') this._throwGrenade();
+      if (e.code === 'KeyF' || e.code === 'KeyG') this._throwGrenade();
       if (e.code === 'Space') this.body.jump();
     });
     addEventListener('keyup', e => (this.keys[e.code] = false));
@@ -69,6 +68,15 @@ export class Player {
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0022));
     });
     addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  _selectTool(i) {
+    if (i === this.tool) return;
+    this.tool = i;
+    this.reloading = 0;
+    sfx.click();
+    this._syncViewmodel();
+    this.game.hud.refreshTool(this);
   }
 
   _reload() {
@@ -147,8 +155,13 @@ export class Player {
   update(dt) {
     if (!this.alive) return;
     const b = this.body;
-    const sprint = this.keys['ShiftLeft'] ? 1.45 : 1;
-    const speed = (b.inWater ? 3.2 : 5.4) * sprint;
+    // Crouch (hold C): trades speed for a steadier aim. Both heights still span
+    // two voxel rows, so standing back up can never wedge us into a ceiling.
+    this.crouched = !!this.keys['KeyC'];
+    const targetH = this.crouched ? 1.15 : 1.75;
+    b.half.h += (targetH - b.half.h) * Math.min(1, dt * 10);
+    const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
+    const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1);
     const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const r = new THREE.Vector3(-f.z, 0, f.x);
     const wish = new THREE.Vector3();
@@ -171,10 +184,14 @@ export class Player {
     this.camera.rotation.set(this.pitch + this.recoil * 0.05, this.yaw - Math.PI / 2, 0, 'YXZ');
     // three.js cameras look down -Z; the -PI/2 offset aligns it with our yaw convention.
 
-    // Viewmodel sway + reload dip.
+    // Viewmodel sway + reload dip + spade chop (raise, then strike forward).
+    this.swing = Math.max(0, this.swing - dt * 3.3);
+    const chop = this.tool === 2 ? Math.sin(this.swing * Math.PI) : 0;
     this.vmRoot.position.y = -0.26 + Math.sin(this.bob * 2) * 0.008 - this.recoil * 0.04
+      + chop * 0.06
       - (this.reloading > 0 ? 0.18 * Math.sin(Math.PI * (1 - this.reloading / TOOLS[this.tool].reload)) : 0);
-    this.vmRoot.rotation.x = -this.recoil * 0.35;
+    this.vmRoot.position.z = -0.25 - chop * 0.22;
+    this.vmRoot.rotation.x = -this.recoil * 0.35 - chop * 0.5;
 
     // Aim zoom.
     const aiming = this.mouseDown[2] && this.tool < 2;
@@ -208,7 +225,7 @@ export class Player {
 
   _useTool() {
     const t = TOOLS[this.tool];
-    if (t.key === 'spade') return this.game.requestDig(this);
+    if (t.key === 'spade') { this.swing = 1; return this.game.requestDig(this); }
     if (t.key === 'block') return this.game.requestPlace(this);
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
@@ -222,6 +239,9 @@ export class Player {
     this.alive = false;
     this.health = 0;
     this.deadT = 0;
+    this.crouched = false;
+    this.body.half.h = 1.75;
+    this.swing = 0;
     this.vmRoot.visible = false; // no floating gun while down
     sfx.hurt();
     this.game.onDeath(this, killer);
@@ -249,6 +269,8 @@ export class Player {
     this.cooldown = 0;
     this.reloading = 0;
     this.deadT = 0;
+    this.crouched = false;
+    this.body.half.h = 1.75;
     this.vmRoot.visible = true;
     sfx.respawn();
   }

@@ -125,10 +125,46 @@ export class Net {
     return net;
   }
 
+  // Peek at one room without joining: resolves { kind: 'room', humans, max },
+  // { kind: 'dead' } (nobody home), or { kind: 'down' } (signaling broken).
+  // Probes run concurrently on ONE peer, and the broker reports a dead target
+  // as a peer-level 'peer-unavailable' error naming that target — so a miss
+  // for slot N must not sink the probe still talking to slot M.
+  static _probe(peer, code, timeoutMs) {
+    return new Promise(resolve => {
+      const target = PREFIX + code;
+      let settled = false;
+      const done = v => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        peer.off('error', onErr);
+        conn.close();
+        resolve(v);
+      };
+      const timer = setTimeout(() => done({ kind: 'dead' }), timeoutMs);
+      const onErr = e => {
+        if (e.type === 'peer-unavailable') {
+          if (String(e.message).includes(target)) done({ kind: 'dead' });
+          return; // somebody else's miss — not ours
+        }
+        done({ kind: 'down' });
+      };
+      peer.on('error', onErr);
+      const conn = peer.connect(target, { reliable: true });
+      conn.on('open', () => conn.send({ t: 'ping' }));
+      conn.on('data', d => { if (d.t === 'pong') done({ kind: 'room', humans: d.humans, max: d.max }); });
+      conn.on('close', () => done({ kind: 'dead' }));
+      conn.on('error', () => done({ kind: 'dead' }));
+    });
+  }
+
   // Quick match over ONE anon guest peer — the broker throttles IPs that open
-  // many signaling sockets, so a scan must be a single socket, not a burst.
-  // Walk the public slots lowest-first so strangers pile into the same rooms:
-  // knock; if nobody's home, claim the slot and host it yourself.
+  // many signaling sockets, so the whole scan multiplexes over a single socket.
+  // All slots are probed concurrently (data connections are cheap; sockets are
+  // not), then we join the FULLEST room that still has space (ties break to
+  // the lowest slot) so strangers pile into the same games. Only if nobody
+  // has room do we claim a dead slot and host it ourselves.
   // Resolves { kind: 'host'|'join', net, slot, welcome? }
   //      or  { kind: 'full-all' } | { kind: 'down' }.
   static async quickScan(name, timeoutMs = 9000) {
@@ -139,19 +175,40 @@ export class Net {
     });
     try { await ready; } catch { guest.destroy(); return { kind: 'down' }; }
     try {
-      for (let i = 0; i < PUBLIC_SLOTS; i++) {
-        const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
-        console.debug(`[qm] knock ${slotCode(i)} -> ${k.kind}`);
+      const results = await Promise.all(
+        Array.from({ length: PUBLIC_SLOTS }, (_, i) =>
+          Net._probe(guest, slotCode(i), timeoutMs).then(p => ({ slot: i, p }))));
+      const open = [], dead = [];
+      for (const { slot, p } of results) {
+        console.debug(`[qm] probe ${slotCode(slot)} -> ${p.kind}${p.kind === 'room' ? ` ${p.humans}/${p.max}` : ''}`);
+        if (p.kind === 'room') { if (p.humans < p.max) open.push({ slot, humans: p.humans }); }
+        else if (p.kind === 'dead') dead.push(slot);
+        else { guest.destroy(); return { kind: 'down' }; }
+      }
+      // Fullest first, ties to the lowest slot number.
+      open.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
+      for (const room of open) {
+        const k = await Net._knock(guest, slotCode(room.slot), name, timeoutMs);
+        console.debug(`[qm] knock ${slotCode(room.slot)} -> ${k.kind}`);
         if (k.kind === 'join')
-          return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: i, welcome: k.welcome };
-        if (k.kind === 'full') continue; // room answered, no space — next slot
+          return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: room.slot, welcome: k.welcome };
         if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
-        // dead slot — try to claim it as our own public room
+        // 'full'/'dead': lost a race — try the next room
+      }
+      for (const i of dead) {
         const c = await Net._claim(slotCode(i), timeoutMs);
         console.debug(`[qm] claim ${slotCode(i)} -> ${c.kind}`);
         if (c.kind === 'host') { guest.destroy(); return { kind: 'host', net: c.net, slot: i }; }
         if (c.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
-        // 'taken': someone raced us to it — keep walking
+        // 'taken': the probe said dead but the id is registered — the broker
+        // never lies about that, so the probe was a false negative (slow net).
+        // Give a proven-live room one direct knock before moving on.
+        const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
+        console.debug(`[qm] knock ${slotCode(i)} (taken) -> ${k.kind}`);
+        if (k.kind === 'join')
+          return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: i, welcome: k.welcome };
+        if (k.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
+        // 'full'/'dead': genuinely unavailable — try the next dead slot
       }
       guest.destroy();
       return { kind: 'full-all' };

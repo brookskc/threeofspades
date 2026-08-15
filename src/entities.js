@@ -109,12 +109,27 @@ export function makeSoldier(teamColor) {
   armL.geometry.translate(0, -0.26, 0);
   armR.geometry.translate(0, -0.26, 0);
   const head = box(0.34, 0.34, 0.34, skin, 0, 1.42, 0);
-  box(0.4, 0.12, 0.4, cloth, 0, 1.62, 0); // helmet brim
+  const brim = box(0.4, 0.12, 0.4, cloth, 0, 1.62, 0); // helmet brim
   const gun = box(0.09, 0.12, 0.7, dark, 0.2, 1.1, -0.35);
   const blob = blobShadow();
   g.add(blob);
 
-  return { group: g, legL, legR, armL, armR, head, torso, gun, blob };
+  return { group: g, legL, legR, armL, armR, head, torso, gun, blob, brim };
+}
+
+// Crouch pose: legs squash, everything above the hips drops. The collision
+// body still spans the same two voxel rows, so standing back up can never
+// wedge the soldier into a ceiling.
+export function setCrouch(parts, on) {
+  if (!!parts.crouched === on) return;
+  parts.crouched = on;
+  parts.legL.scale.y = parts.legR.scale.y = on ? 0.5 : 1;
+  parts.legL.position.y = parts.legR.position.y = on ? 0.3 : 0.6;
+  parts.torso.position.y = on ? 0.62 : 0.92;
+  parts.armL.position.y = parts.armR.position.y = on ? 0.88 : 1.18;
+  parts.head.position.y = on ? 1.12 : 1.42;
+  parts.brim.position.y = on ? 1.32 : 1.62;
+  parts.gun.position.y = on ? 0.8 : 1.1;
 }
 
 // Shared walk-cycle animation for player-less bodies.
