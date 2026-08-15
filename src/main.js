@@ -97,7 +97,9 @@ function deploy() {
 // --- solo / resume ---
 // After a dead connection the button becomes a way back to a clean menu.
 let netDead = false;
-let matchmaking = false; // quick-match scan in flight — lobby buttons hold
+let matchmaking = false;   // quick-match scan in flight — lobby buttons hold
+let searchCanceled = false; // Esc pressed mid-search: discard the result
+let suppressResume = false; // unlock came from a failed search, not the player
 $('playBtn').addEventListener('click', () => {
   if (netDead) return location.reload();
   if (matchmaking) return;
@@ -128,6 +130,7 @@ function adoptHost(n, code, opts = {}) {
         $('roomcode').querySelector('b').textContent = code;
       }
       showPlay('DEPLOY — START MATCH');
+      if (playing) setPlaying(true); // quick match dropped in already: resync HUD
       if (params.get('auto')) setPlaying(true);
       opts.onOpen?.();
     },
@@ -152,7 +155,8 @@ function adoptJoin(n, code) {
   window.__net = n;
   roomCode = code;
   game.net = n;
-  $('roomcode').querySelector('b').textContent = code;
+  const pub = /^PUB(\d)$/.exec(code); // public slots show as "PUBLIC n"
+  $('roomcode').querySelector('b').textContent = pub ? `PUBLIC ${+pub[1] + 1}` : code;
   n.handlers.onData = d => game.clientOnData(d);
   n.handlers.onClose = () => {
     netDead = true;
@@ -165,16 +169,19 @@ function adoptJoin(n, code) {
     if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
     n.destroy();
     status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`);
+    if (playing) bailToMenu(); // we were warming up in-world for a quick match
   };
   game.onFull = () => {
     if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
     n.handlers.onClose = null; // a polite refusal, not a dropped connection
     n.destroy();
     status('that room is full — 8 players max');
+    if (playing) bailToMenu();
   };
   game.onWelcome = () => {
     status(`connected — you are <b>${game.player.team.toUpperCase()}</b>`);
     showPlay('DEPLOY');
+    if (playing) setPlaying(true); // quick match dropped in already: resync HUD
     if (params.get('auto')) setPlaying(true);
   };
 }
@@ -212,12 +219,31 @@ $('joinBtn').addEventListener('click', () => {
 // the next quick-matcher then finds you. If every room is full we wait a beat
 // and scan once more: rooms churn fast, and a probe may have raced a join.
 // ?qmt=30000 stretches per-step timeouts (CI/very slow networks).
+//
+// The first click drops you straight into the world: pointer lock is only
+// guaranteed inside this click's gesture, not when the async scan resolves
+// seconds later — so lock NOW and let the player warm up against the menu
+// map's bots while the search runs; the room's world swaps in on resolution.
+// If the browser refuses the lock, the DEPLOY button flow is the fallback.
 const qmTimeout = parseInt(params.get('qmt'), 10) || 9000;
+
+// Back to a clean menu with no session: nothing to resume into.
+function bailToMenu() {
+  $('playBtn').style.display = 'none';
+  if (document.pointerLockElement === renderer.domElement) {
+    suppressResume = true;
+    document.exitPointerLock();
+  }
+}
+
 $('quickBtn').addEventListener('click', async () => {
   if (net || matchmaking) return;
   matchmaking = true;
+  searchCanceled = false;
   initAudio();
   game.player.name = callsign();
+  const lock = renderer.domElement.requestPointerLock(); // gesture-valid only now
+  lock?.catch?.(() => {}); // refused → DEPLOY fallback below
   status('searching for a public room…');
   try {
     let r = await Net.quickScan(game.player.name, qmTimeout);
@@ -226,6 +252,7 @@ $('quickBtn').addEventListener('click', async () => {
       await new Promise(res => setTimeout(res, 1500));
       r = await Net.quickScan(game.player.name, qmTimeout);
     }
+    if (searchCanceled) { r.net?.destroy(); return; } // bailed with Esc mid-search
     if (r.kind === 'join') {
       game.mode = 'client';
       adoptJoin(r.net, slotCode(r.slot));
@@ -233,16 +260,19 @@ $('quickBtn').addEventListener('click', async () => {
       game.onWelcome = () => { // richer line than the code-join default
         plain();
         status(`joined <b>PUBLIC ROOM ${r.slot + 1}</b> — you are <b>${game.player.team.toUpperCase()}</b>`);
+        game.hud.message(`JOINED PUBLIC ROOM ${r.slot + 1} — YOU ARE ${game.player.team.toUpperCase()}`, '#ffd97a');
       };
       game.clientOnData(r.welcome); // replay the welcome through the normal path
     } else if (r.kind === 'host') {
       game.mode = 'host';
       game.rebuild(Math.floor(Math.random() * 1e9));
       adoptHost(r.net, slotCode(r.slot), { public: true, alreadyOpen: true });
-    } else if (r.kind === 'down') {
-      status('cannot reach the matchmaking service — check your connection');
+      game.hud.message(`HOSTING PUBLIC ROOM ${r.slot + 1} — PLAYERS WILL DROP IN`, '#ffd97a');
     } else {
-      status('all public rooms are full — try again shortly, or HOST a private room');
+      status(r.kind === 'down'
+        ? 'cannot reach the matchmaking service — check your connection'
+        : 'all public rooms are full — try again shortly, or HOST a private room');
+      bailToMenu();
     }
   } finally { matchmaking = false; }
 });
@@ -269,9 +299,17 @@ document.addEventListener('pointerlockchange', () => {
   // Drop all held inputs so nobody runs/shoots blind while the menu is up.
   game.player.keys = {};
   game.player.mouseDown = [false, false, false];
+  if (matchmaking && !net) { // Esc mid-search, before any room adopted us
+    searchCanceled = true;
+    status('search canceled');
+  }
   if (!game.over && !netDead) {
     setPlaying(false);
-    showPlay('RESUME');
+    // A canceled/failed search leaves no session — RESUME would be a solo
+    // backdoor into the menu map, so the button stays hidden.
+    if (searchCanceled || suppressResume) $('playBtn').style.display = 'none';
+    else showPlay('RESUME');
+    suppressResume = false;
   }
 });
 
@@ -314,6 +352,9 @@ function frame() {
   // the host's own menu is up, or every client freezes with it.
   if (playing || game.mode === 'host') {
     game.update(dt);
+    // Persistent centered notice while the player warms up in-world and the
+    // quick-match scan is still running (message fade re-arms each frame).
+    if (matchmaking) game.hud.message('searching for a public room — warm up!', '#ffd97a');
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;

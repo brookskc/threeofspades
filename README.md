@@ -25,13 +25,15 @@ back in if someone leaves.
 Real browser-to-browser multiplayer over WebRTC — no server, no install, works
 straight from GitHub Pages.
 
-**QUICK MATCH is the front door.** Type a callsign, hit deploy, and you're in a
-public room with strangers. It peeks at a small set of deterministic public
-slots, then joins the **fullest room that still has space** — so players pile
-into the same games instead of scattering across empty ones. If no room is
-open, it quietly claims a slot and hosts one for the next quick-matcher to
-find. Rooms are capped at **8 human players**, with humans always split across
-opposing teams (you fight *each other*, not side-by-side against bots).
+**QUICK MATCH is the front door.** Type a callsign, click once, and you're
+in — the first click drops you straight into the world (warm up on the menu
+map while the search runs), and the room's map swaps in the moment a match is
+found. It peeks at a small set of deterministic public slots, then joins the
+**fullest room that still has space** — so players pile into the same games
+instead of scattering across empty ones. If no room is open, it quietly claims
+a slot and hosts one for the next quick-matcher to find. Rooms are capped at
+**8 human players**, with humans always split across opposing teams (you fight
+*each other*, not side-by-side against bots).
 
 Want a private lobby instead? The small `host` / `join` links under the main
 button give you a 4-letter room code to share with friends.
