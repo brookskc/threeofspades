@@ -260,6 +260,11 @@ export class Game {
     this.mapIndex = map;
     this.world = new VoxelWorld(this.scene);
     generateMap(this.world, seed, map);
+    // Bodies capture the world instance at construction; the player and any
+    // remote proxies survive rebuild, so rebind them or they'd keep colliding
+    // with the previous map while the new one renders on screen.
+    this.player.body.world = this.world;
+    for (const rp of this.remote.values()) rp.body.world = this.world;
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.bots = [];
     if (this.mode !== 'client') this._spawnBots();

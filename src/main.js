@@ -84,10 +84,15 @@ function showPlay(label) {
 function setPlaying(v) {
   playing = v;
   $('menu').classList.toggle('hidden', v);
+  // In-session menu (Esc pause / rotation break) is a different screen from
+  // the home lobby: no callsign, no QUICK MATCH — just resume or leave.
+  $('menu').classList.toggle('paused', !v && !!net);
   $('hud').classList.toggle('on', v);
   game.player.vmRoot.visible = v;
   $('roomcode').style.display = v && roomCode ? 'block' : 'none';
 }
+
+$('leaveBtn').addEventListener('click', () => location.reload());
 
 function deploy() {
   initAudio();
@@ -220,11 +225,11 @@ $('joinBtn').addEventListener('click', () => {
 // and scan once more: rooms churn fast, and a probe may have raced a join.
 // ?qmt=30000 stretches per-step timeouts (CI/very slow networks).
 //
-// The first click drops you straight into the world: pointer lock is only
-// guaranteed inside this click's gesture, not when the async scan resolves
-// seconds later — so lock NOW and let the player warm up against the menu
-// map's bots while the search runs; the room's world swaps in on resolution.
-// If the browser refuses the lock, the DEPLOY button flow is the fallback.
+// The first click drops you straight in: pointer lock is only guaranteed
+// inside this click's gesture, not when the async scan resolves seconds
+// later — so lock NOW and hold it behind a searching ticker; when the room
+// is ready the menu drops away and you're already playing. If the browser
+// refuses the lock, the DEPLOY button flow is the fallback.
 const qmTimeout = parseInt(params.get('qmt'), 10) || 9000;
 
 // Back to a clean menu with no session: nothing to resume into.
@@ -244,6 +249,7 @@ $('quickBtn').addEventListener('click', async () => {
   game.player.name = callsign();
   const lock = renderer.domElement.requestPointerLock(); // gesture-valid only now
   lock?.catch?.(() => {}); // refused → DEPLOY fallback below
+  $('menu').classList.add('searching');
   status('searching for a public room…');
   try {
     let r = await Net.quickScan(game.player.name, qmTimeout);
@@ -253,6 +259,7 @@ $('quickBtn').addEventListener('click', async () => {
       r = await Net.quickScan(game.player.name, qmTimeout);
     }
     if (searchCanceled) { r.net?.destroy(); return; } // bailed with Esc mid-search
+    $('menu').classList.remove('searching');
     if (r.kind === 'join') {
       game.mode = 'client';
       adoptJoin(r.net, slotCode(r.slot));
@@ -273,7 +280,11 @@ $('quickBtn').addEventListener('click', async () => {
         ? 'cannot reach the matchmaking service — check your connection'
         : 'all public rooms are full — try again shortly, or HOST a private room');
       bailToMenu();
+      return;
     }
+    // Lock held since the click: drop straight in, no DEPLOY gate. (If the
+    // lock was refused, adopt* already surfaced the DEPLOY button instead.)
+    if (document.pointerLockElement === renderer.domElement) setPlaying(true);
   } finally { matchmaking = false; }
 });
 
@@ -295,12 +306,15 @@ game.onRestart = mapName => {
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
-  if (locked) { setPlaying(true); return; }
+  // While a quick-match search runs, the lock is held behind the searching
+  // ticker — don't start playing until the room is actually ready.
+  if (locked) { if (!(matchmaking && !net)) setPlaying(true); return; }
   // Drop all held inputs so nobody runs/shoots blind while the menu is up.
   game.player.keys = {};
   game.player.mouseDown = [false, false, false];
   if (matchmaking && !net) { // Esc mid-search, before any room adopted us
     searchCanceled = true;
+    $('menu').classList.remove('searching');
     status('search canceled');
   }
   if (!game.over && !netDead) {
@@ -352,9 +366,6 @@ function frame() {
   // the host's own menu is up, or every client freezes with it.
   if (playing || game.mode === 'host') {
     game.update(dt);
-    // Persistent centered notice while the player warms up in-world and the
-    // quick-match scan is still running (message fade re-arms each frame).
-    if (matchmaking) game.hud.message('searching for a public room — warm up!', '#ffd97a');
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;

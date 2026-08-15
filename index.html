@@ -52,6 +52,21 @@
   #mapname { position:absolute; left:22px; bottom:18px; font-size:12px;
     letter-spacing:4px; opacity:.45; text-transform:uppercase; }
   #mapname b { color:#ffd97a; font-weight:600; }
+
+  /* menu variants: .paused (mid-session Esc) and .searching (quick match) */
+  .only-paused, .only-searching { display:none; }
+  #menu.paused .only-paused { display:block; }
+  #menu.paused .home-only { display:none; }
+  #menu.searching .only-searching { display:block; }
+  #menu.searching .home-only, #menu.searching #playBtn { display:none; }
+  #pausedTitle { margin-top:10px; font-size:15px; letter-spacing:6px; opacity:.6; }
+  #searching { margin-top:38px; font-size:22px; letter-spacing:4px; color:#ffd97a; }
+  #searching .dots span { animation:blink 1.4s infinite both; }
+  #searching .dots span:nth-child(2) { animation-delay:.2s; }
+  #searching .dots span:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 0%,80%,100% { opacity:.15; } 40% { opacity:1; } }
+  .searchsub { margin-top:12px; font-size:12px; letter-spacing:2px; opacity:.45;
+    color:#e8ecf2; }
   #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
   #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
   #roomcode b { color:#ffd97a; letter-spacing:4px; }
@@ -143,17 +158,23 @@
   <div class="screen" id="menu">
     <div class="title"><span class="ace">THREE</span> <span class="spades">of SPADES</span></div>
     <div class="subtitle">a voxel arena shooter made with three.js</div>
-    <input id="nameInput" maxlength="12" placeholder="ENTER CALLSIGN">
+    <input id="nameInput" class="home-only" maxlength="12" placeholder="ENTER CALLSIGN">
+    <div id="pausedTitle" class="only-paused">— PAUSED —</div>
     <div class="play" id="playBtn">DEPLOY</div>
-    <div class="play accent" id="quickBtn">QUICK MATCH</div>
+    <div class="play small only-paused" id="leaveBtn">MAIN MENU</div>
+    <div class="play accent home-only" id="quickBtn">QUICK MATCH</div>
+    <div id="searching" class="only-searching">
+      SEARCHING FOR A PUBLIC ROOM<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+      <div class="searchsub">esc to cancel</div>
+    </div>
     <div id="lobbyStatus"></div>
-    <div class="private">
+    <div class="private home-only">
       private game — <span class="plink" id="hostBtn">host</span> &nbsp;·&nbsp;
       code <input id="codeInput" maxlength="4" placeholder="····">
       <span class="plink" id="joinBtn">join</span>
     </div>
-    <div id="mapname">now showing — <b>GREENBELT</b></div>
-    <div class="controls">
+    <div id="mapname" class="home-only">now showing — <b>GREENBELT</b></div>
+    <div class="controls home-only">
       <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 4 · Q · E</b> rifle · smg · spade · block &nbsp;·&nbsp; <b>F</b> grenade &nbsp;·&nbsp; <b>R</b> reload</div>

@@ -26,9 +26,9 @@ Real browser-to-browser multiplayer over WebRTC — no server, no install, works
 straight from GitHub Pages.
 
 **QUICK MATCH is the front door.** Type a callsign, click once, and you're
-in — the first click drops you straight into the world (warm up on the menu
-map while the search runs), and the room's map swaps in the moment a match is
-found. It peeks at a small set of deterministic public slots, then joins the
+in — a searching ticker holds the menu while matchmaking runs, then the menu
+drops away straight into the match (no second click, no DEPLOY gate; `Esc`
+cancels the search). It peeks at a small set of deterministic public slots, then joins the
 **fullest room that still has space** — so players pile into the same games
 instead of scattering across empty ones. If no room is open, it quietly claims
 a slot and hosts one for the next quick-matcher to find. Rooms are capped at
@@ -94,7 +94,7 @@ through a block in 3 shots, an SMG in 7. Cover is temporary.
 
 `WASD` move · `Space` jump/swim · `Shift` sprint · `C` crouch (steadier aim) ·
 `LMB` fire/dig/place · `RMB` aim · `1–4` / `Q`·`E` select tool · `F` grenade ·
-`R` reload · `Esc` pause
+`R` reload · `Esc` pause (in a match: resume or back to the main menu)
 
 ## Tech notes
 
