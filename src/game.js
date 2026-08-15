@@ -11,6 +11,9 @@ import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
+// Hard cap on humans per room (host + guests). Test hook: ?cap=2.
+const capParam = parseInt(new URLSearchParams(location.search).get('cap'), 10);
+export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(8, Math.max(2, capParam)) : 8;
 const $ = id => document.getElementById(id);
 const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
 const arr = v => [v.x, v.y, v.z];
@@ -634,6 +637,11 @@ export class Game {
   }
 
   _hostAddPlayer(id, name) {
+    if (this.remote.size + 1 >= MAX_HUMANS) { // room full — turn them away politely
+      this.net.sendTo(id, { t: 'full' });
+      setTimeout(() => this.net.conns.get(id)?.close(), 400); // let the packet land
+      return;
+    }
     name = String(name ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'recruit';
     const humans = { green: 1, blue: 0 }; // host is green
     for (const p of this.remote.values()) humans[p.team]++;
@@ -692,6 +700,7 @@ export class Game {
 
   // ---------------- client networking ----------------
   clientOnData(d) {
+    if (d.t === 'full') return this.onFull?.();
     if (d.t === 'w') {
       this.myId = d.id;
       this.player.team = d.team;

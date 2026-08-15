@@ -25,10 +25,16 @@ straight from GitHub Pages:
 1. **Host** clicks `HOST`, gets a 4-letter room code, shares it, then deploys.
 2. **Friends** enter the code and a callsign, click `JOIN`, then deploy.
 
+Or skip the codes entirely: **QUICK MATCH** drops you into a public room with
+strangers. It knocks on a small set of deterministic public slots
+(lowest-numbered first, so players pile into the same rooms), joins the first
+one with space — and if none are open, it quietly claims a slot and hosts it
+for the next quick-matcher to find. Rooms are capped at **8 human players**.
+
 The host's browser runs the authoritative match (bots, flags, damage, grenades,
 terrain edits); everyone else connects directly to it over a peer-to-peer data
 channel. Joining mid-match is fine — a bot steps aside to make room, and steps
-back in if the player leaves. Up to ~8 players is the comfortable zone. Signaling
+back in if the player leaves. Signaling
 (the initial introduction between browsers) rides the free PeerJS cloud; after
 that, gameplay traffic never leaves the peers.
 

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { initAudio } from './audio.js';
 import { SX, SZ } from './world.js';
-import { Net, makeCode } from './net.js';
+import { Net, makeCode, PUBLIC_SLOTS, slotCode } from './net.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -90,81 +90,148 @@ function deploy() {
 // --- solo / resume ---
 // After a dead connection the button becomes a way back to a clean menu.
 let netDead = false;
+let matchmaking = false; // quick-match scan in flight — lobby buttons hold
 $('playBtn').addEventListener('click', () => {
   if (netDead) return location.reload();
+  if (matchmaking) return;
   if (game.mode === 'client' && !game.myId) return; // still connecting
   deploy();
 });
 
-// --- host a room ---
+// --- room wiring, shared by HOST / JOIN / QUICK MATCH ---
+// Handlers live on the Net instance, so these adopt functions can attach (or
+// re-attach) the full game wiring to a connection at any moment — including
+// one that quick match already used for its handshake.
+
+// Adopt a claimed host peer: UI text, lobby hooks, game handlers.
+// opts.alreadyOpen: the claim succeeded before adoption — fire onOpen now.
+function adoptHost(n, code, opts = {}) {
+  net = n;
+  window.__net = n;
+  roomCode = code;
+  game.net = n;
+  n.handlers = {
+    onOpen: () => {
+      if (opts.public) {
+        const num = +code.slice(3) + 1;
+        status(`hosting <b>PUBLIC ROOM ${num}</b> — quick-match players will drop in`);
+        $('roomcode').querySelector('b').textContent = 'PUBLIC ' + num;
+      } else {
+        status(`room code <b>${code}</b> — share it, then deploy`);
+        $('roomcode').querySelector('b').textContent = code;
+      }
+      $('playBtn').textContent = 'DEPLOY — START MATCH';
+      if (params.get('auto')) setPlaying(true);
+      opts.onOpen?.();
+    },
+    onError: e => {
+      if (e.type === 'unavailable-id' && (opts.public || !params.get('code'))) {
+        n.destroy();
+        if (net === n) net = null;
+        opts.onTaken?.(); // roll again with a fresh peer
+      } else status(`network error: ${e.type}`);
+    },
+    onData: (id, d) => game.hostOnData(id, d),
+    onLeave: id => game.hostOnLeave(id),
+  };
+  if (opts.alreadyOpen) n.handlers.onOpen();
+}
+
+// Adopt a welcomed guest connection: HUD code, game handlers, welcome/full
+// callbacks. The caller that opened the channel decides whether 'hi' still
+// needs sending (quick match already sent it during the knock).
+function adoptJoin(n, code) {
+  net = n;
+  window.__net = n;
+  roomCode = code;
+  game.net = n;
+  $('roomcode').querySelector('b').textContent = code;
+  n.handlers.onData = d => game.clientOnData(d);
+  n.handlers.onClose = () => {
+    netDead = true;
+    status('connection lost — the host left');
+    $('playBtn').textContent = 'RETURN TO MENU';
+    if (playing) { setPlaying(false); document.exitPointerLock?.(); }
+  };
+  n.handlers.onError = e => {
+    // Join failed before the match started — reset so the lobby still works.
+    if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
+    n.destroy();
+    status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`);
+  };
+  game.onFull = () => {
+    if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
+    n.handlers.onClose = null; // a polite refusal, not a dropped connection
+    n.destroy();
+    status('that room is full — 8 players max');
+  };
+  game.onWelcome = () => {
+    status(`connected — you are <b>${game.player.team.toUpperCase()}</b>`);
+    $('playBtn').textContent = 'DEPLOY';
+    if (params.get('auto')) setPlaying(true);
+  };
+}
+
 $('hostBtn').addEventListener('click', () => {
-  if (net) return;
+  if (net || matchmaking) return;
   initAudio();
   game.mode = 'host';
   game.player.name = callsign();
   game.rebuild(Math.floor(Math.random() * 1e9));
   const tryCode = () => {
-    roomCode = params.get('code')?.toUpperCase() ?? makeCode();
-    net = Net.host(roomCode, {
-      onOpen: () => {
-        status(`room code <b>${roomCode}</b> — share it, then deploy`);
-        $('roomcode').querySelector('b').textContent = roomCode;
-        $('playBtn').textContent = 'DEPLOY — START MATCH';
-        if (params.get('auto')) setPlaying(true);
-      },
-      onError: e => {
-        if (e.type === 'unavailable-id' && !params.get('code')) {
-          net.destroy();
-          net = null;
-          tryCode(); // roll again with a fresh peer
-        } else status(`network error: ${e.type}`);
-      },
-      onData: (id, d) => game.hostOnData(id, d),
-      onLeave: id => game.hostOnLeave(id),
-    });
-    game.net = net;
+    const code = params.get('code')?.toUpperCase() ?? makeCode();
+    adoptHost(Net.host(code, {}), code, { onTaken: tryCode });
   };
   tryCode();
   status('creating room…');
 });
 
-// --- join a room ---
 $('joinBtn').addEventListener('click', () => {
-  if (net) return;
+  if (net || matchmaking) return;
   const code = $('codeInput').value.trim().toUpperCase();
   if (code.length !== 4) return status('enter the 4-letter room code');
   initAudio();
   game.mode = 'client';
   game.player.name = callsign();
   status('connecting…');
-  net = Net.join(code, {
-    onOpen: () => {
-      roomCode = code;
-      $('roomcode').querySelector('b').textContent = code;
-      net.send({ t: 'hi', name: game.player.name });
-    },
-    onData: d => game.clientOnData(d),
-    onClose: () => {
-      netDead = true;
-      status('connection lost — the host left');
-      $('playBtn').textContent = 'RETURN TO MENU';
-      if (playing) { setPlaying(false); document.exitPointerLock?.(); }
-    },
-    onError: e => {
-      // Join failed before the match started — reset so the lobby still works.
-      net.destroy();
-      net = null;
-      game.net = null;
-      game.mode = 'solo';
-      status(e.type === 'peer-unavailable' ? 'room not found — check the code' : `network error: ${e.type}`);
-    },
-  });
-  game.net = net;
-  game.onWelcome = () => {
-    status(`connected — you are <b>${game.player.team.toUpperCase()}</b>`);
-    $('playBtn').textContent = 'DEPLOY';
-    if (params.get('auto')) setPlaying(true);
-  };
+  const n = Net.join(code, {});
+  adoptJoin(n, code);
+  n.handlers.onOpen = () => n.send({ t: 'hi', name: game.player.name });
+});
+
+// --- quick match: drop into a public room with strangers ---
+// Net.quickScan walks the public slots lowest-first over a single signaling
+// socket: knock on each, join the first with space, or claim the first dead
+// slot and host it — the next quick-matcher then finds you.
+// ?qmt=30000 stretches per-step timeouts (CI/very slow networks).
+const qmTimeout = parseInt(params.get('qmt'), 10) || 9000;
+$('quickBtn').addEventListener('click', async () => {
+  if (net || matchmaking) return;
+  matchmaking = true;
+  initAudio();
+  game.player.name = callsign();
+  status('searching for a public room…');
+  try {
+    const r = await Net.quickScan(game.player.name, qmTimeout);
+    if (r.kind === 'join') {
+      game.mode = 'client';
+      adoptJoin(r.net, slotCode(r.slot));
+      const plain = game.onWelcome;
+      game.onWelcome = () => { // richer line than the code-join default
+        plain();
+        status(`joined <b>PUBLIC ROOM ${r.slot + 1}</b> — you are <b>${game.player.team.toUpperCase()}</b>`);
+      };
+      game.clientOnData(r.welcome); // replay the welcome through the normal path
+    } else if (r.kind === 'host') {
+      game.mode = 'host';
+      game.rebuild(Math.floor(Math.random() * 1e9));
+      adoptHost(r.net, slotCode(r.slot), { public: true, alreadyOpen: true });
+    } else if (r.kind === 'down') {
+      status('cannot reach the matchmaking service — check your connection');
+    } else {
+      status('all public rooms are full — try again shortly, or HOST a private room');
+    }
+  } finally { matchmaking = false; }
 });
 
 $('codeInput').addEventListener('keydown', e => {
@@ -192,12 +259,15 @@ addEventListener('resize', () => {
 });
 
 // Headless/test hooks: ?mp=host&code=TEST&auto=1 · ?mp=join&code=TEST&auto=1
+// ?mp=quick&auto=1&ns=<namespace> · host cap override: &cap=2
 if (params.get('mp') === 'host') {
   $('codeInput').value = '';
   $('hostBtn').click();
 } else if (params.get('mp') === 'join') {
   $('codeInput').value = params.get('code') ?? 'TEST';
   setTimeout(() => $('joinBtn').click(), 800);
+} else if (params.get('mp') === 'quick') {
+  setTimeout(() => $('quickBtn').click(), 400);
 }
 
 // ---------------- loop ----------------

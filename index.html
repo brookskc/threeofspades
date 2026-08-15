@@ -28,6 +28,9 @@
     background:rgba(255,255,255,.06); transition:.2s; user-select:none; }
   .play:hover { background:rgba(255,255,255,.18); transform:translateY(-2px); }
   .play.small { margin-top:0; padding:10px 26px; font-size:15px; }
+  .play.accent { margin-top:16px; border-color:#ffd97a; color:#ffd97a;
+    font-size:17px; padding:12px 44px; }
+  .play.accent:hover { background:rgba(255,217,122,.14); }
   .play.disabled { opacity:.35; pointer-events:none; }
   .lobbyrow { display:flex; gap:12px; margin-top:18px; align-items:center; }
   .lobbyrow input { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.3);
@@ -128,6 +131,7 @@
     <div class="title"><span class="ace">THREE</span> <span class="spades">of SPADES</span></div>
     <div class="subtitle">a voxel arena shooter · ace of spades × three.js</div>
     <div class="play" id="playBtn">SOLO MISSION</div>
+    <div class="play accent" id="quickBtn">QUICK MATCH</div>
     <div class="lobbyrow">
       <div class="play small" id="hostBtn">HOST</div>
       <div class="play small" id="joinBtn">JOIN</div>
@@ -140,6 +144,7 @@
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 4</b> rifle · smg · spade · block &nbsp;·&nbsp; <b>G</b> grenade &nbsp;·&nbsp; <b>R</b> reload</div>
       <div><b>MISSION</b> steal the blue flag, bring it home — first to 3 captures wins</div>
+      <div><b>QUICK MATCH</b> auto-joins a public room with strangers — up to 8 players</div>
     </div>
   </div>
 
