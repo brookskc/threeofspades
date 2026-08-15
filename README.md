@@ -73,8 +73,8 @@ seed:
 | Map | Theme |
 |---|---|
 | **GREENBELT** | The classic rolling green island. Open hills, midfield ridgelines — pure arena CTF. |
-| **BEACHHEAD** | D-Day. Green team storms out of landing craft onto open sand dotted with tank traps; Blue holds the bluff in concrete MG pillboxes with firing slits. |
-| **PINEFALL** | Dense pine forest cut by a winding creek. Short sightlines, flanking routes, ambush country. |
+| **BEACHHEAD** | D-Day. Green team storms out of landing craft onto sand thick with tank traps, past their own beach-head pillbox and a trench cut into the bluff; Blue holds the heights in concrete MG pillboxes with firing slits. |
+| **PINEFALL** | Dense pine forest cut by a wide winding creek. Short sightlines, flanking routes, ambush country. |
 | **DUNES** | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. |
 
 The home screen shows them off itself — the menu backdrop is a slow orbit that
@@ -98,7 +98,9 @@ through a block in 3 shots, an SMG in 7. Cover is temporary.
 
 ### Controls
 
-`WASD` move · `Space` jump/swim · `Shift` sprint · `C` crouch (steadier aim) ·
+`WASD` move · `Space` jump/swim · `Shift` sprint · `CTRL` crouch — slower,
+steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
+taller than one block (single steps still pass, so slopes stay walkable) ·
 `LMB` fire/dig/place · `RMB` aim · `1–4` / `Q`·`E` select tool · `F` grenade ·
 `R` reload · `Esc` pause (in a match: resume or back to the main menu)
 
@@ -114,7 +116,10 @@ through a block in 3 shots, an SMG in 7. Cover is temporary.
   besides screenshots.
 - **Bots** (`src/bots.js`) run a small sense–decide–act loop: acquire targets with
   line-of-sight checks, strafe while firing, path toward flags, and shovel through
-  obstacles when stuck.
+  obstacles when stuck — swimming counts, so a bot that falls in the Pinefall
+  creek digs the bank into a staircase and climbs out, overhangs included. Bots
+  caught in the open at rifle range throw up a three-wide knee wall, then fight
+  from behind it — standing to fire, ducking to reload.
 - **Multiplayer** (`src/net.js`) wraps PeerJS in a host-authoritative star:
   clients send inputs and actions, the host simulates, everyone renders
   snapshots with ~130 ms interpolation (`src/avatar.js`). Maps are

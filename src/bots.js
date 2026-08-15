@@ -1,6 +1,6 @@
 // bots.js — AI soldiers: they hunt the flag, fight back, and dig through walls.
 import * as THREE from 'three';
-import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath } from './entities.js';
+import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch } from './entities.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
@@ -39,6 +39,10 @@ export class Bot {
     this.wanderT = 0;
     this.digT = 0;             // tunneling swing cooldown
     this.lastDig = -9;         // last shovel swing, game time
+    this.blocks = 12;          // combat engineering inventory
+    this.buildT = 0;           // cooldown between throwing up cover
+    this.coverT = 0;           // hold-and-fight timer behind fresh cover
+    this.duckT = 0;            // duck rhythm: reloads and burst pauses
     this.face = new THREE.Vector3(this.heading, 0, 0); // where the head points
     this.memoryT = 0;          // keeps tracking a target just out of sight
     this.responding = false;   // rushing to recover our dropped flag?
@@ -104,21 +108,34 @@ export class Bot {
     if (dist > 1.2) dir.normalize();
 
     // Combat strafe when engaged up close.
+    let toFoe = null;
     if (this.target && this.aimT > 0.3) {
-      const toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
+      toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
       const side = new THREE.Vector3(-toFoe.z, 0, toFoe.x).multiplyScalar(Math.sin(g.time * 1.7 + this.name.length) > 0 ? 1 : -1);
       dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
     }
 
+    // --- combat engineering: caught in the open at range, throw up a
+    // knee-high wall toward the threat, then fight from behind it ---
+    this.buildT -= dt; this.coverT -= dt; this.duckT -= dt;
+    if (this.target && !this.carrier && !this.responding && toFoe &&
+        b.onGround && !b.inWater && this.blocks >= 3 && this.buildT <= 0 &&
+        this.coverT <= 0) {
+      const foeD = b.pos.distanceTo(this.target.body.pos);
+      if (foeD > 8 && foeD < 42 && !this._hasCover(toFoe)) this._build(toFoe);
+    }
+    // Behind fresh cover: hold the line instead of advancing.
+    if (this.coverT > 0 && this.target) dir.multiplyScalar(0.15);
+
     // --- terrain negotiation: tunnel level, stair-step uphill, hop steps ---
     // The passage ahead is two voxels high at foot level; whatever of it is
-    // solid gets shovelled, one swing every 0.32s, feet planted (airborne
-    // swings gouge random heights). A full wall with the goal uphill and open
-    // sky becomes a staircase: clear a ledge above the step, hop on, repeat —
-    // that climbs out of any pit. Anything else is tunnelled through level.
-    // While the shovel is swinging the bot holds a digger's pace so it never
-    // bumps the wall between swings (that bump used to trigger the stuck-hop,
-    // pop it onto the ridge crest, and abandon the tunnel).
+    // solid gets shovelled, one swing every 0.32s, feet planted or swimming
+    // (airborne swings gouge random heights). A full wall with the goal
+    // uphill becomes a staircase: clear the ledge, the headroom above it,
+    // and any block hanging over the bot's own head — then hop on and
+    // repeat. That climbs out of pits AND the Pinefall ravine: the old code
+    // demanded dry feet and open sky, so a bot treading creek water under a
+    // sheer bank could only bob there forever.
     this.digT -= dt;
     const w = g.world, fy = Math.floor(b.pos.y);
     // Probe the contact column first, then a step beyond: a bot pressed
@@ -131,16 +148,19 @@ export class Bot {
       if (lo || hi) { tx = px; tz = pz; break; }
       lo = hi = false;
     }
-    if (!this.target && dist > 2 && this.digT <= 0 && hi && b.onGround) {
+    if (!this.target && dist > 2 && this.digT <= 0 && hi && (b.onGround || b.inWater)) {
       this.digT = 0.32;
       this.lastDig = g.time;
       const uphill = goal.y - b.pos.y > 1.5;
-      const ceiling = w.solid(Math.floor(b.pos.x), fy + 2, Math.floor(b.pos.z));
-      if (lo && uphill && !ceiling) {
-        this._digV(tx, fy + 1, tz); this._digV(tx, fy + 2, tz); // ledge, then hop on
+      if (lo && uphill) {
+        this._digV(tx, fy + 1, tz); this._digV(tx, fy + 2, tz);  // the ledge
+        this._digV(tx, fy + 3, tz);                              // its headroom
+        // The block above our own head: an overhang would guillotine the hop.
+        this._digV(Math.floor(b.pos.x), fy + 2, Math.floor(b.pos.z));
         b.jump();
+        if (b.inWater) b.vel.y = 6; // swim-hop needs extra lift to crest the lip
       } else {
-        this._digV(tx, fy, tz); this._digV(tx, fy + 1, tz);     // wall face or lip
+        this._digV(tx, fy, tz); this._digV(tx, fy + 1, tz);      // wall face or lip
       }
     }
     const digging = g.time - this.lastDig < 0.9;
@@ -174,6 +194,13 @@ export class Bot {
 
     b.move(dt);
 
+    // Cover posture: duck while reloading behind the wall or riding out a
+    // burst pause; stand to shoot. Same bounded lerp as the player crouch.
+    if (this.reloading > 0 && this.coverT > 0) this.duckT = Math.max(this.duckT, 0.2);
+    const ducking = this.duckT > 0;
+    b.half.h += ((ducking ? 1.15 : 1.75) - b.half.h) * Math.min(1, dt * 10);
+    setCrouch(this.parts, ducking);
+
     // --- shooting ---
     this.cooldown -= dt;
     if (this.reloading > 0) {
@@ -188,7 +215,9 @@ export class Bot {
         // opening shots go wide before the aim settles. No 180° no-scopes.
         if (this.face.dot(toFoe) > 0.87 && g.losClear(from, this.target.body.eye())) {
           this.ammo--;
-          this.cooldown = GUN.interval * (Math.random() < 0.25 ? 4 : 1); // burst rhythm
+          const burstPause = Math.random() < 0.25;
+          this.cooldown = GUN.interval * (burstPause ? 4 : 1); // burst rhythm
+          if (burstPause && this.coverT > 0) this.duckT = this.cooldown + 0.15;
           const err = Math.max(0.015, 0.2 - this.aimT * 0.16);
           const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
           aim.x += (Math.random() - .5) * err * 2;
@@ -247,6 +276,33 @@ export class Bot {
     if (this.game.world.solid(x, y, z)) this.game.digVoxel(this, x, y, z);
   }
 
+  // Knee-high cover already standing between us and the foe?
+  _hasCover(toFoe) {
+    const w = this.game.world, b = this.body, fy = Math.floor(b.pos.y);
+    for (const reach of [1.2, 2.2, 3.2]) {
+      const px = Math.floor(b.pos.x + toFoe.x * reach);
+      const pz = Math.floor(b.pos.z + toFoe.z * reach);
+      if (w.solid(px, fy, pz)) return true;
+    }
+    return false;
+  }
+
+  // A three-wide knee wall two paces toward the threat: tall enough to hide a
+  // crouch, low enough to shoot over standing. Follows the ground one step
+  // down so walls on a downhill slope don't float.
+  _build(toFoe) {
+    const b = this.body, fy = Math.floor(b.pos.y), w = this.game.world;
+    const perp = new THREE.Vector3(-toFoe.z, 0, toFoe.x);
+    let placed = 0;
+    for (const off of [-1, 0, 1]) {
+      const cx = Math.floor(b.pos.x + toFoe.x * 2.2 + perp.x * off);
+      const cz = Math.floor(b.pos.z + toFoe.z * 2.2 + perp.z * off);
+      const gy = w.solid(cx, fy - 1, cz) ? fy : w.solid(cx, fy - 2, cz) ? fy - 1 : null;
+      if (gy !== null && this.game.tryBuild(this, cx, gy, cz)) placed++;
+    }
+    if (placed) { this.buildT = 9; this.coverT = 6; }
+  }
+
   die(killer) {
     this.alive = false;
     this.deadT = 0; // corpse tumble starts; the body hides itself when done
@@ -265,6 +321,11 @@ export class Bot {
     this.sampleT = 0.4;
     this.digT = 0;
     this.lastDig = -9;
+    this.blocks = 12;
+    this.buildT = 0;
+    this.coverT = 0;
+    this.duckT = 0;
+    this.body.half.h = 1.75;
     this.target = null;
     this.aimT = 0;
     this.memoryT = 0;

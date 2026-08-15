@@ -171,6 +171,17 @@ function genBeach(world, seed) {
       height[at(x, z)] = Math.min(SY - 8, h);
     }
 
+  // A covered lane up the bluff for the landing team: a trench cut two
+  // blocks deep through the kill zone and up the slope, so green can reach
+  // the ridge with its head down instead of crossing open sand the whole way.
+  const trenchZ = SZ / 2 + 20 + Math.floor(noise(7, seed % 13) * 12);
+  for (let x = 92; x <= 166; x++)
+    for (let dz = -3; dz <= 3; dz++) {
+      const z = trenchZ + dz;
+      if (z < 2 || z >= SZ - 2) continue;
+      height[at(x, z)] -= 2.2 * (1 - Math.abs(dz) / 3.5);
+    }
+
   flattenBases(height);
   fillColumns(world, height, (x, z, h) => h <= SEA + 5 ? BLOCK.SAND : BLOCK.GRASS);
 
@@ -187,34 +198,41 @@ function genBeach(world, seed) {
           world.data[(y * SZ + z) * SX + x] = BLOCK.STONE;
       }
   }
-  // Czech hedgehogs scattered across the sand — little triangles of cover.
+  // Czech hedgehogs scattered thick across the sand — little triangles of
+  // cover. The landing team needs a lot of them: the kill zone is long.
   const rnd = mulberry32(seed ^ 0xBEAC);
-  for (let i = 0; i < 30; i++) {
-    const x = 62 + Math.floor(rnd() * 36), z = 24 + Math.floor(rnd() * (SZ - 48));
+  for (let i = 0; i < 55; i++) {
+    const x = 60 + Math.floor(rnd() * 40), z = 24 + Math.floor(rnd() * (SZ - 48));
     const y = Math.floor(height[at(x, z)]);
     world.data[((y + 1) * SZ + z) * SX + x] = BLOCK.STONE;
     world.data[((y + 2) * SZ + z) * SX + x] = BLOCK.STONE;
     world.data[((y + 1) * SZ + z) * SX + x + 1] = BLOCK.STONE;
   }
-  // MG pillboxes dug into the bluff top, guns slitted toward the beach.
-  for (const pz of [SZ / 2 - 48, SZ / 2, SZ / 2 + 48]) {
-    const px = 150 + Math.floor(noise(pz, 11) * 6);
+  // MG pillbox: 5×5 stone shell, firing slit on the `face` side (±2 in x),
+  // rear door on the opposite side.
+  const pillbox = (px, pz, face) => {
     const py = Math.floor(height[at(px, pz)]);
     for (let dx = -2; dx <= 2; dx++)
       for (let dz = -2; dz <= 2; dz++) {
         const x = px + dx, z = pz + dz;
         const edge = Math.abs(dx) === 2 || Math.abs(dz) === 2;
         if (!edge) continue;
-        if (dx === 2 && Math.abs(dz) <= 0) continue;                  // rear door (east)
+        if (dx === -face && Math.abs(dz) <= 0) continue;                    // rear door
         for (let y = py + 1; y <= py + 3; y++) {
-          if (dx === -2 && Math.abs(dz) <= 1 && y === py + 2) continue; // firing slit
+          if (dx === face && Math.abs(dz) <= 1 && y === py + 2) continue;   // firing slit
           world.data[(y * SZ + z) * SX + x] = BLOCK.STONE;
         }
       }
-    for (let dx = -2; dx <= 2; dx++)                                  // roof
+    for (let dx = -2; dx <= 2; dx++)                                        // roof
       for (let dz = -2; dz <= 2; dz++)
         world.data[((py + 4) * SZ + pz + dz) * SX + px + dx] = BLOCK.STONE;
-  }
+  };
+  // Three pillboxes dug into the bluff top, guns slitted toward the beach —
+  // and one green bunker at the beach head answering back, so the landing
+  // team has a forward strongpoint to rally on.
+  for (const pz of [SZ / 2 - 48, SZ / 2, SZ / 2 + 48])
+    pillbox(150 + Math.floor(noise(pz, 11) * 6), pz, -2);
+  pillbox(72, SZ / 2, 2);
 
   buildBase(world, height, 'green');
   buildBase(world, height, 'blue');
@@ -234,10 +252,11 @@ function genForest(world, seed) {
       let h = SEA + 4
         + rim * 18 * (0.6 * noise(x * 0.016, z * 0.016)
                     + 0.4 * noise(x * 0.05,  z * 0.05));
-      // A winding creek carved just below the waterline.
+      // A winding creek carved just below the waterline — wide enough to
+      // matter as a midfield obstacle (and to fight along).
       const creekZ = SZ / 2 + 58 * Math.sin(x * 0.017 + seed % 7);
       const cd = Math.abs(z - creekZ);
-      if (cd < 3.5 && x > 60 && x < SX - 60) h = Math.min(h, SEA - 1);
+      if (cd < 5.5 && x > 60 && x < SX - 60) h = Math.min(h, SEA - 1);
       height[at(x, z)] = Math.min(SY - 8, h);
     }
 

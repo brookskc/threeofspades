@@ -106,7 +106,7 @@ const hud = {
     else $('ammo').innerHTML = p.reloading > 0
       ? `<small>reloading…</small>`
       : `${p.ammo[p.tool]} <small>/ ${t.mag}</small>`;
-    $('toolhint').textContent = `Q·E / 1–4 weapons · F grenade ×${p.grenades} · C crouch`;
+    $('toolhint').textContent = `Q·E / 1–4 weapons · F grenade ×${p.grenades} · CTRL crouch`;
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';
@@ -520,18 +520,23 @@ export class Game {
     const hit = this.world.raycast(origin, dir, 6);
     if (!hit) return;
     const x = hit.x + hit.nx, y = hit.y + hit.ny, z = hit.z + hit.nz;
-    if (this.world.get(x, y, z)) return;
-    // Never entomb anyone (including yourself).
+    if (this.tryBuild(p, x, y, z) && p === this.player) { sfx.place(); hud.refreshTool(p); }
+  }
+
+  // Shared placement rules for players and bots: cell must be empty, nobody
+  // gets entombed, the builder's team color is used, inventory decremented.
+  tryBuild(p, x, y, z) {
+    if (p.blocks <= 0 || this.world.get(x, y, z)) return false;
     for (const e of this.entities()) {
       if (!e.alive) continue;
       const b = e.body;
       if (x + 1 > b.pos.x - b.half.x && x < b.pos.x + b.half.x &&
           z + 1 > b.pos.z - b.half.x && z < b.pos.z + b.half.x &&
-          y + 1 > b.pos.y && y < b.pos.y + b.half.h) return;
+          y + 1 > b.pos.y && y < b.pos.y + b.half.h) return false;
     }
     this.applyEdit(x, y, z, p.team === 'blue' ? BLOCK.BLUE : BLOCK.GREEN);
     p.blocks--;
-    if (p === this.player) { sfx.place(); hud.refreshTool(p); }
+    return true;
   }
 
   // ---------------- grenades ----------------

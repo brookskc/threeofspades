@@ -12,6 +12,7 @@ export class Body {
     this.half = { x: 0.32, h: 1.75 };      // half-width, full height
     this.onGround = false;
     this.inWater = false;
+    this.guard = false; // crouch edge-guard: refuse to walk off a real drop
   }
 
   // Axis-separated integration: move one axis at a time, clamp on collision.
@@ -28,11 +29,21 @@ export class Body {
 
   _axis(axis, delta) {
     if (delta === 0) return;
+    const old = this.pos[axis];
     this.pos[axis] += delta;
     const p = this.pos, h = this.half;
     const x0 = Math.floor(p.x - h.x), x1 = Math.floor(p.x + h.x);
     const y0 = Math.floor(p.y),        y1 = Math.floor(p.y + h.h);
     const z0 = Math.floor(p.z - h.x),  z1 = Math.floor(p.z + h.x);
+    // Edge-guard (crouch-walking): never let the whole footprint leave solid
+    // footing when the far side is more than a single step down. One-block
+    // steps still pass, so slopes and stairs stay walkable while crouched;
+    // ravine rims and parapets stop you cold.
+    if (this.guard && this.onGround && axis !== 'y' && !this._footing(y0)) {
+      p[axis] = old;
+      this.vel[axis] = 0;
+      return;
+    }
     for (let y = y0; y <= y1; y++)
       for (let z = z0; z <= z1; z++)
         for (let x = x0; x <= x1; x++) {
@@ -50,6 +61,16 @@ export class Body {
           }
           return;
         }
+  }
+
+  // Is there ground within one step anywhere under the footprint?
+  _footing(y0) {
+    const h = this.half, p = this.pos;
+    for (let y = y0 - 1; y >= y0 - 2; y--)
+      for (let x = Math.floor(p.x - h.x); x <= Math.floor(p.x + h.x); x++)
+        for (let z = Math.floor(p.z - h.x); z <= Math.floor(p.z + h.x); z++)
+          if (this.world.solid(x, y, z)) return true;
+    return false;
   }
 
   jump() {

@@ -37,7 +37,7 @@ export class Player {
     this.bob = 0;
     this.recoil = 0;
     this.swing = 0; // spade chop animation
-    this.crouched = false; // hold C: slower, steadier aim
+    this.crouched = false; // hold CTRL: slower, steadier aim, ledge grip
     this.carrier = false; // carrying the enemy flag?
 
     this._buildViewmodel();
@@ -155,11 +155,13 @@ export class Player {
   update(dt) {
     if (!this.alive) return;
     const b = this.body;
-    // Crouch (hold C): trades speed for a steadier aim. Both heights still span
-    // two voxel rows, so standing back up can never wedge us into a ceiling.
-    this.crouched = !!this.keys['KeyC'];
+    // Crouch (hold CTRL): trades speed for a steadier aim. Both heights still
+    // span two voxel rows, so standing up can never wedge us into a ceiling.
+    this.crouched = !!(this.keys['ControlLeft'] || this.keys['ControlRight']);
     const targetH = this.crouched ? 1.15 : 1.75;
     b.half.h += (targetH - b.half.h) * Math.min(1, dt * 10);
+    // Crouch-walking grips the rim: no falling into ravines or off parapets.
+    b.guard = this.crouched;
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
     const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1);
     const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
