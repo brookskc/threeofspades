@@ -177,6 +177,7 @@ function adoptJoin(n, code) {
   n.handlers.onData = d => game.clientOnData(d);
   n.handlers.onClose = () => {
     netDead = true;
+    $('end').classList.add('hidden'); // a dead host ends the rotation wait too
     status('connection lost — the host left');
     showPlay('RETURN TO MENU');
     if (playing) { setPlaying(false); document.exitPointerLock?.(); }
@@ -307,13 +308,14 @@ $('codeInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('joinBtn').click();
 });
 
-$('againBtn').addEventListener('click', () => location.reload());
-
-// Map rotation: the room moves to the next map after each match — hide the
-// end screen and wait at the lobby with DEPLOY ready (pointer lock needs a
-// fresh click anyway).
+// Map rotation: the room moves to the next map after each match. The end
+// screen offers no choices while it turns — only once the new map is built
+// does the lobby come back with DEPLOY ready (pointer lock needs a fresh
+// click anyway). The old PLAY AGAIN reloaded the page, which for the host
+// tore the whole room down mid-rotation.
 game.onRestart = mapName => {
   $('end').classList.add('hidden');
+  $('pausedTitle').textContent = '— MATCH OVER —';
   if (playing) setPlaying(false);
   showPlay('DEPLOY');
   status(`new map — <b>${mapName}</b>`);
@@ -333,6 +335,7 @@ document.addEventListener('pointerlockchange', () => {
     status('search canceled');
   }
   if (!game.over && !netDead) {
+    $('pausedTitle').textContent = '— PAUSED —';
     setPlaying(false);
     // A canceled/failed search leaves no session — RESUME would be a solo
     // backdoor into the menu map, so the button stays hidden.
