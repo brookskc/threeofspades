@@ -11,6 +11,10 @@ import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
+// A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
+// blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
+// 7 shots, bot carbine 16 -> 10). The spade still digs in one hit.
+const BLOCK_HP = 150;
 // Hard cap on humans per room (host + guests). Test hook: ?cap=2.
 const capParam = parseInt(new URLSearchParams(location.search).get('cap'), 10);
 export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(8, Math.max(2, capParam)) : 8;
@@ -211,6 +215,7 @@ export class Game {
     this.net = opts.net ?? null;
     this.seed = opts.seed ?? 1979;
     this.editLog = [];                     // host: every world change, for late joiners
+    this.blockHits = new Map();            // host/solo: 'x,y,z' -> remaining gunfire HP
     this.remote = new Map();               // host: peerId -> RemoteProxy
     this.avatars = new Map();              // client: key -> Avatar
     this.myId = null;
@@ -260,6 +265,7 @@ export class Game {
     if (this.mode !== 'client') this._spawnBots();
     this.captures = { green: 0, blue: 0 };
     this.editLog = [];
+    this.blockHits.clear();
     this.grenades = [];
     this.grenadeMesh.visible = false;
     this.respawnTimers.clear();
@@ -375,10 +381,22 @@ export class Game {
       this.damage(hit, dmg, shooter);
     }
 
-    // Gunfire demolishes blocks: whatever voxel stopped the bullet is removed
-    // (fireHitscan only ever runs on the host/solo side, so this stays
-    // authoritative and reaches clients through the edit broadcast).
-    if (voxel) this.applyEdit(voxel.x, voxel.y, voxel.z, 0);
+    // Gunfire chips blocks: the voxel that stopped the bullet accumulates
+    // damage and breaks after BLOCK_HP. Skipped when an entity absorbed the
+    // shot first — the bullet never reached the wall. (fireHitscan only ever
+    // runs on the host/solo side, so this stays authoritative and the break
+    // reaches clients through the edit broadcast.)
+    if (voxel && !hit) this.hitBlock(voxel.x, voxel.y, voxel.z, spec.damage ?? 20);
+  }
+
+  hitBlock(x, y, z, dmg) {
+    const key = x + ',' + y + ',' + z;
+    const hp = (this.blockHits.get(key) ?? BLOCK_HP) - dmg;
+    if (hp > 0) { this.blockHits.set(key, hp); return; }
+    this.blockHits.delete(key);
+    const v = this.world.get(x, y, z);
+    this.applyEdit(x, y, z, 0);
+    this.effects.blockBurst([{ x, y, z, v }]);
   }
 
   // Tracer + impact particles + report sound (shared by local sim and net replay).
@@ -445,6 +463,7 @@ export class Game {
 
   // ---------------- block tools ----------------
   applyEdit(x, y, z, v) {
+    this.blockHits.delete(x + ',' + y + ',' + z);  // fresh block / cleared cell: full HP
     this.world.set(x, y, z, v);
     if (this.mode === 'host') {
       this.editLog.push([x, y, z, v]);

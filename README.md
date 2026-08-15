@@ -82,7 +82,8 @@ seed:
 | **Grenades** | Bounce, cook for 2.4s, then carve a real crater out of the map. |
 
 All terrain is destructible: spades and grenades remove blocks outright, and
-sustained gunfire breaks blocks too — cover is temporary.
+gunfire chips blocks by the same damage it deals to players — a rifle punches
+through a block in 3 shots, an SMG in 7. Cover is temporary.
 
 ### Controls
 
