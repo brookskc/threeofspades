@@ -163,7 +163,74 @@ const hud = {
     $('respawn').style.opacity = t > 0 ? 1 : 0;
     if (t > 0) $('respawn').textContent = `REDEPLOYING IN ${Math.ceil(t)}…`;
   },
+  // Chat line. The text goes in as a TEXT NODE — never HTML — so a message
+  // can't inject markup.
+  chatMsg(m) {
+    const log = $('chatlog');
+    $('chat').classList.add('haslog');
+    const div = document.createElement('div');
+    if (m.scope === 'team') {
+      const tag = document.createElement('span');
+      tag.className = 'tm';
+      tag.textContent = 'TEAM';
+      div.append(tag);
+    }
+    const n = document.createElement('span');
+    n.className = 'cn';
+    n.style.color = m.team === 'blue' ? '#8fa8ee' : '#8fd98f';
+    n.textContent = m.name;
+    div.append(n, document.createTextNode(m.text));
+    log.append(div);
+    while (log.children.length > 8) log.firstChild.remove();
+    clearTimeout(div._ft); clearTimeout(div._rt);
+    div._ft = setTimeout(() => div.classList.add('faded'), 11000);
+    div._rt = setTimeout(() => div.remove(), 12000);
+  },
 };
+
+// ---------------- chat controller ----------------
+// T talks to the room, Y talks to your team, Enter sends, Esc walks away.
+// While the box is open the soldier holds still: movement keys are released
+// and typing lands in the input, not the bindings.
+class Chat {
+  constructor(game) {
+    this.game = game;
+    this.scope = 'all';
+    this.box = $('chat');
+    this.input = $('chatin');
+    addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT') return;        // typing elsewhere
+      if (this.isOpen) return;                          // input captures its own keys
+      if (!$('hud').classList.contains('on')) return;   // menus own the keyboard
+      if (e.code === 'KeyT') { e.preventDefault(); this.open('all'); }
+      else if (e.code === 'KeyY') { e.preventDefault(); this.open('team'); }
+    });
+    this.input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.code === 'Enter') this.send();
+      else if (e.code === 'Escape') this.close();
+    });
+    this.input.addEventListener('blur', () => this.close());
+  }
+  get isOpen() { return this.box.classList.contains('open'); }
+  open(scope) {
+    this.scope = scope;
+    $('chatscope').textContent = scope === 'team' ? 'TEAM' : 'ALL';
+    this.box.classList.add('open');
+    this.game.player.keys = {}; // don't keep charging forward while typing
+    this.input.value = '';
+    this.input.focus();
+  }
+  close() {
+    this.box.classList.remove('open');
+    this.input.blur();
+  }
+  send() {
+    const text = this.input.value.trim();
+    this.close();
+    if (text) this.game.sendChat(text, this.scope);
+  }
+}
 
 const nameSpan = e =>
   `<span style="color:${e.team === 'blue' ? '#8fa8ee' : '#8fd98f'}">${e.name}</span>`;
@@ -228,6 +295,8 @@ export class Game {
     this._snapT = 0;
     this._sendT = 0;
     this._lastHealth = 100;
+    this._respawnT = 0;                  // client: cosmetic redeploy countdown
+    this._chatCd = 0;                    // chat send cooldown (wall clock)
 
     this.world = new VoxelWorld(scene);
     this.mapIndex = 0;                   // MAPS rotation position
@@ -237,6 +306,7 @@ export class Game {
     this.player = new Player(this, camera, dom);
     this.player.name = opts.name ?? 'You';
     this.hud = hud;
+    this.chat = new Chat(this);
 
     if (this.mode !== 'client') this._spawnBots();
 
@@ -444,6 +514,46 @@ export class Game {
     this.net.send({ t: 'a', k: 'nade', o: arr(p.body.eye()), d: arr(p.lookDir()) });
   }
 
+  // ---------------- chat ----------------
+  // Local echo is immediate; in a room the host is the relay (and the spam
+  // filter), so a message reaches every screen exactly once.
+  sendChat(text, scope) {
+    const now = performance.now();
+    if (now < this._chatCd) return;         // easy on the enter key
+    this._chatCd = now + 1200;
+    const p = this.player;
+    hud.chatMsg({ name: p.name, team: p.team, text, scope });
+    if (this.mode === 'client') this.net.send({ t: 'a', k: 'chat', text, scope });
+    else if (this.mode === 'host') this._hostRelayChat(null, p.team, text, scope);
+  }
+
+  // Host side: show it here, then forward to everyone the message is for —
+  // the whole room, or just the sender's team — never back to the sender.
+  _hostRelayChat(fromId, team, text, scope) {
+    const m = { t: 'e', k: 'chat', name: fromId == null ? this.player.name
+      : this.remote.get(fromId)?.name, team, text, scope };
+    for (const [id, p] of this.remote) {
+      if (id === fromId) continue;
+      if (scope === 'team' && p.team !== team) continue;
+      this.net.sendTo(id, m);
+    }
+  }
+
+  _hostOnChat(id, text, scope) {
+    const p = this.remote.get(id);
+    if (!p) return;
+    const now = performance.now();          // per-sender throttle, host-enforced
+    if (now < (p._chatCd ?? 0)) return;
+    p._chatCd = now + 1200;
+    text = String(text ?? '').trim().slice(0, 120);
+    if (!text) return;
+    scope = scope === 'team' ? 'team' : 'all';
+    // Team chatter is for teammates only — the host included.
+    if (scope === 'all' || p.team === this.player.team)
+      hud.chatMsg({ name: p.name, team: p.team, text, scope });
+    this._hostRelayChat(id, p.team, text, scope);
+  }
+
   damage(victim, amount, attacker) {
     if (!victim.alive || this.over) return;
     victim.health -= amount;
@@ -464,12 +574,11 @@ export class Game {
     if (killer && killer !== victim) hud.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
     else hud.feed(`${nameSpan(victim)} blew up`);
 
-    if (victim === this.player) {
-      this.respawnTimers.set(victim, 3);
-      hud.respawn(3);
-    } else {
-      this.respawnTimers.set(victim, 4);
-    }
+    // Humans wait out a real redeploy timer; bots cycle faster to keep the
+    // field populated.
+    const t = (victim === this.player || victim.isRemote) ? 10 : 4;
+    this.respawnTimers.set(victim, t);
+    if (victim === this.player) hud.respawn(t);
   }
 
   // ---------------- block tools ----------------
@@ -673,10 +782,19 @@ export class Game {
     }
     if (d.t === 'hi') {
       if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
+      const row = this._migRoster?.get(id);
+      if (row) { // a survivor finding the new room: restore, don't respawn
+        const p = this._restoreProxy(id, cleanName(d.name), row);
+        this._migRoster.delete(id);
+        this.net.sendTo(id, { t: 'w', id, team: p.team, migrated: 1 });
+        this.feed(`${nameSpan(p)} rejoined ${p.team.toUpperCase()}`);
+        return;
+      }
       return this._hostAddPlayer(id, cleanName(d.name));
     }
     const p = this.remote.get(id);
     if (!p) return;
+    if (d.t === 'a' && d.k === 'chat') return this._hostOnChat(id, d.text, d.scope);
     if (d.t === 's') {
       p.body.pos.set(d.x, d.y, d.z);
       p.tool = d.tool;
@@ -712,6 +830,80 @@ export class Game {
     this._removeBot(team);
     this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog });
     this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
+  }
+
+  // ---------------- host migration ----------------
+  // The host dropped and the election picked us: promote this client's
+  // replica into the authoritative simulation. World, scores, flags, and
+  // the edit log are already snapshot-synced; players and bots get real
+  // host-side bodies restored to their last replicated state, so the match
+  // just… keeps going.
+  promoteToHost(net) {
+    const oldId = this.myId;
+    this.mode = 'host';
+    this.net = net;
+    this.myId = 'HOST';
+    // Client stand-in avatars give way to real bodies — RemoteProxy and Bot
+    // construct their own.
+    for (const av of this.avatars.values()) av.dispose();
+    this.avatars.clear();
+    this._migRoster = new Map();
+    for (const e of this._roster ?? []) {
+      const [id, , name] = e;
+      if (id === 'HOST' || id === oldId) continue;
+      this._migRoster.set(id, e);
+      this._restoreProxy(id, name, e);
+    }
+    for (const r of this._botRows ?? []) {
+      const [, name, team, x, y, z, , health, alive, carrier] = r;
+      const bot = new Bot(this, team, name);
+      bot.body.pos.set(x, y, z);
+      bot.body.vel.set(0, 0, 0);
+      bot.health = health;
+      bot.carrier = !!carrier;
+      if (!alive) {
+        bot.alive = false;
+        bot.deadT = 1.5; // corpse already finished tumbling on our screen
+        bot.parts.group.visible = false;
+        this.respawnTimers.set(bot, 4);
+      }
+      this.bots.push(bot);
+    }
+    // Snapshots record that a flag is carried, not by whom — reattach it to
+    // whoever on the enemy team was flagged as carrier. If the carrier was
+    // the departed host, the flag drops where it was.
+    for (const team of ['green', 'blue']) {
+      const f = this.flags[team];
+      if (f.state === 'carried') {
+        const c = this.entities().find(e => e.carrier && e.team === this.enemyOf(team));
+        if (c) f.carrier = c;
+        else { f.state = 'dropped'; f.carrier = null; f.dropTimer = 30; }
+      }
+    }
+    // A death mid-handover still gets its respawn; a finished match still
+    // gets its rotation.
+    if (!this.player.alive) this.respawnTimers.set(this.player, 4);
+    if (this.over) this._rotateT = 2;
+    // Stragglers get a minute to find the new room before their roster entry
+    // lapses and any later knock is treated as a fresh join.
+    setTimeout(() => { this._migRoster = null; }, 60000);
+  }
+
+  // Rebuild one RemoteProxy from its last snapshot row.
+  _restoreProxy(id, name, row) {
+    const [, team, , x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = row;
+    const proxy = new RemoteProxy(this, id, name, team);
+    proxy.body.pos.set(x, y, z);
+    proxy.avatar.push(x, y, z, ry);
+    proxy.health = health;
+    proxy.alive = !!alive;
+    proxy.carrier = !!carrier;
+    proxy.tool = tool;
+    proxy.blocks = blocks;
+    proxy.crouched = !!crouch;
+    if (!proxy.alive) this.respawnTimers.set(proxy, 4);
+    this.remote.set(id, proxy);
+    return proxy;
   }
 
   hostOnLeave(id) {
@@ -762,21 +954,33 @@ export class Game {
 
   // ---------------- client networking ----------------
   clientOnData(d) {
+    this.lastRecv = performance.now(); // host heartbeat (snapshots beat at 12Hz)
     if (d.t === 'full') return this.onFull?.();
     if (d.t === 'w') {
       this.myId = d.id;
       this.player.team = d.team;
-      this.rebuild(d.seed, d.map ?? 0);
-      for (const e of d.log) {
-        if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]), e[4]);
-        else this.world.set(e[0], e[1], e[2], e[3]);
+      if (d.migrated) {
+        // Baton-pass rejoin: we never left — keep the world, position, and
+        // kit we already have; the new host corrects drift via snapshots.
+        this.onWelcome?.();
+      } else {
+        this.rebuild(d.seed, d.map ?? 0);
+        this.editLog = d.log; // kept current below: migration hosting needs it
+        for (const e of d.log) {
+          if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]), e[4]);
+          else this.world.set(e[0], e[1], e[2], e[3]);
+        }
+        this.onWelcome?.();
       }
-      this.onWelcome?.();
     } else if (d.t === 's') this._clientSnapshot(d);
     else if (d.t === 'e') this._clientEvent(d);
   }
 
   _clientSnapshot(d) {
+    // Keep the raw rows: if the host drops, any client may be elected to
+    // rebuild the authoritative sim from exactly this state.
+    this._roster = d.p;
+    this._botRows = d.b;
     const seen = new Set();
     for (const e of d.p) {
       const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = e;
@@ -826,8 +1030,14 @@ export class Game {
 
   _clientEvent(d) {
     switch (d.k) {
-      case 'edit': this.world.set(d.x, d.y, d.z, d.v); break;
-      case 'boom': this.explodeAt(d.x, d.y, d.z, d.r); break;
+      case 'edit':
+        this.world.set(d.x, d.y, d.z, d.v);
+        this.editLog.push([d.x, d.y, d.z, d.v]); // migration: late joiners get it from us
+        break;
+      case 'boom':
+        this.explodeAt(d.x, d.y, d.z, d.r);
+        this.editLog.push(['b', d.x, d.y, d.z, d.r]);
+        break;
       case 'shot':
         if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f));
         break;
@@ -836,6 +1046,10 @@ export class Game {
         if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
         break;
       case 'hit': sfx.hit(); hud.hitmark(); break;
+      case 'chat':
+        hud.chatMsg({ name: cleanName(d.name), team: d.team === 'blue' ? 'blue' : 'green',
+                      text: String(d.text ?? '').slice(0, 120), scope: d.scope });
+        break;
       case 'died': this._clientDied(); break;
       case 'spawn':
         this.player.respawn({ x: d.x, y: d.y, z: d.z });
@@ -852,13 +1066,24 @@ export class Game {
 
   _clientDied() {
     this.player.alive = false;
+    this._respawnT = 10; // mirrors the host's human redeploy timer
     sfx.hurt();
     hud.damage();
-    $('respawn').style.opacity = 1;
-    $('respawn').textContent = 'REDEPLOYING…';
+    hud.respawn(10);
   }
 
   _clientUpdate(dt) {
+    // Host-drop watchdog: a host whose tab is killed (or network unplugged)
+    // never sends a close frame — WebRTC silence is the only signal, and ICE
+    // can take ages to give up on its own. Snapshots beat at 12Hz; four
+    // seconds of silence means the host is gone and the baton must pass.
+    if (this.lastRecv && performance.now() - this.lastRecv > 4000)
+      this.onHostSilent?.();
+    // Cosmetic redeploy countdown — the host's 'rs' event is the real one.
+    if (!this.player.alive && this._respawnT > 0) {
+      this._respawnT -= dt;
+      if (this._respawnT > 0) hud.respawn(this._respawnT);
+    }
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
     for (const av of this.avatars.values()) av.update(this.time);

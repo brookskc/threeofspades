@@ -164,6 +164,109 @@ function adoptHost(n, code, opts = {}) {
   if (opts.alreadyOpen) n.handlers.onOpen();
 }
 
+// ---------------- host migration ----------------
+// The host's browser IS the simulation, so a host dropping used to end the
+// match for everyone. Instead every client keeps a migration-ready replica
+// (world edit log + the last full snapshot), and when the connection dies
+// the survivors converge on a deterministic fallback room — <code>-M1, then
+// -M2 if the baton fumbles again. The lowest-ranked survivor claims it and
+// promotes its replica to host; the rest knock until it answers. From the
+// players' seats the world freezes for a few seconds, then just continues.
+let migrationGen = 0; // which baton pass this room is on
+
+function failMigration(guest) {
+  guest?.destroy();
+  netDead = true;
+  $('end').classList.add('hidden'); // a dead room ends the rotation wait too
+  status('connection lost — the host left, and nobody could pick up the baton');
+  showPlay('RETURN TO MENU');
+  if (playing) { setPlaying(false); document.exitPointerLock?.(); }
+}
+
+function adoptMigratedHost(n, code, gen) {
+  net = n;
+  window.__net = n;
+  roomCode = code;
+  game.net = n;
+  game.migGen = gen; // which baton pass we adopted (0 = original room)
+  n.handlers = {
+    onData: (id, d) => game.hostOnData(id, d),
+    onLeave: id => game.hostOnLeave(id),
+    onError: e => status(`network error: ${e.type}`),
+  };
+  console.debug(`[mig] promoted to host of ${code}`);
+  game.promoteToHost(n);
+  $('roomcode').querySelector('b').textContent = code;
+  game.hud.message('BATON PASSED — YOU ARE HOSTING THE MATCH', '#ffd97a');
+  status('the host dropped — <b>you are hosting now</b>');
+}
+
+function adoptMigratedClient(peer, conn, code, welcome, gen) {
+  const n = Net.adoptGuest(peer, conn);
+  net = n;
+  window.__net = n;
+  roomCode = code;
+  game.net = n;
+  game.migGen = gen;
+  n.handlers.onData = d => game.clientOnData(d);
+  n.handlers.onClose = () => startMigration(n); // the baton can pass again
+  n.handlers.onError = () => {};
+  game.onHostSilent = () => startMigration(n);
+  console.debug(`[mig] rejoined migrated room ${code} as client`);
+  game.clientOnData(welcome); // migrated welcome: world and kit kept as-is
+  $('roomcode').querySelector('b').textContent = code;
+  game.hud.message('BATON PASSED — THE MATCH CONTINUES', '#ffd97a');
+  status('host dropped — a teammate picked it up');
+}
+
+async function migrateRoom(deadNet) {
+  const gen = ++migrationGen;
+  const migCode = `${roomCode}-M${gen}`;
+  const myOldId = game.myId;
+  const all = (game._roster ?? []).map(e => e[0])
+    .filter(id => id !== 'HOST').sort();
+  const rank = Math.max(0, all.indexOf(myOldId)); // lowest survivor claims first
+  game.hud.message('HOST DROPPED — PASSING THE BATON…', '#ffd97a');
+  const guest = deadNet.peer; // still open: our identity for the knock
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const t0 = performance.now();
+  while (net === deadNet) { // a newer session would supersede this loop
+    if (performance.now() - t0 >= rank * 3000) {
+      console.debug(`[mig] gen${gen} rank${rank} claiming ${migCode}`);
+      // Generous timeouts: a busy tab (throttled, backgrounded, or just
+      // loaded) can take many seconds to finish the broker + ICE handshake.
+      const c = await Net._claim(migCode, 15000);
+      console.debug(`[mig] claim -> ${c.kind}`);
+      if (net !== deadNet) { c.net?.destroy(); return; }
+      if (c.kind === 'host') { guest.destroy(); return adoptMigratedHost(c.net, migCode, gen); }
+      if (c.kind === 'down') return failMigration(guest);
+      // 'taken' — someone beat us to the baton; fall through and knock
+    }
+    const k = await Net._knock(guest, migCode, game.player.name, 15000);
+    console.debug(`[mig] gen${gen} knock ${migCode} -> ${k.kind}`);
+    if (net !== deadNet) { k.conn?.close(); return; }
+    if (k.kind === 'join') return adoptMigratedClient(guest, k.conn, migCode, k.welcome, gen);
+    if (k.kind === 'down') return failMigration(guest);
+    await sleep(700);
+  }
+}
+
+function startMigration(n) {
+  // The silence watchdog fires every frame once the host goes quiet — only
+  // the first call may start the loop.
+  if (net !== n || n._migrating) return;
+  n._migrating = true;
+  // Neuter the old session's handlers NOW: its peer-level error listener
+  // ("room not found — check the code") is still attached, and every probe
+  // of the not-yet-claimed migration room legitimately errors
+  // 'peer-unavailable' while we wait for the new host to register. That
+  // stale handler would reset the lobby mid-migration and kill the loop.
+  n.handlers = {};
+  if (game.mode !== 'client' || !game.myId || !game._roster)
+    return failMigration(n.peer); // died before the first snapshot — nothing to save
+  migrateRoom(n).catch(() => failMigration(n.peer));
+}
+
 // Adopt a welcomed guest connection: HUD code, game handlers, welcome/full
 // callbacks. The caller that opened the channel decides whether 'hi' still
 // needs sending (quick match already sent it during the knock).
@@ -175,13 +278,8 @@ function adoptJoin(n, code) {
   const pub = /^PUB(\d+)$/.exec(code); // public slots show as "PUBLIC n"
   $('roomcode').querySelector('b').textContent = pub ? `PUBLIC ${+pub[1] + 1}` : code;
   n.handlers.onData = d => game.clientOnData(d);
-  n.handlers.onClose = () => {
-    netDead = true;
-    $('end').classList.add('hidden'); // a dead host ends the rotation wait too
-    status('connection lost — the host left');
-    showPlay('RETURN TO MENU');
-    if (playing) { setPlaying(false); document.exitPointerLock?.(); }
-  };
+  n.handlers.onClose = () => startMigration(n);
+  game.onHostSilent = () => startMigration(n);
   n.handlers.onError = e => {
     // Join failed before the match started — reset so the lobby still works.
     if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
@@ -206,6 +304,7 @@ function adoptJoin(n, code) {
 
 $('hostBtn').addEventListener('click', () => {
   if (net || matchmaking) return;
+  migrationGen = 0; // a fresh room starts the baton count over
   if (!requireName()) return;
   initAudio();
   game.mode = 'host';
@@ -223,6 +322,7 @@ $('joinBtn').addEventListener('click', () => {
   if (net || matchmaking) return;
   const code = $('codeInput').value.trim().toUpperCase();
   if (code.length !== 4) return status('enter the 4-letter room code');
+  migrationGen = 0;
   if (!requireName()) return;
   initAudio();
   game.mode = 'client';
@@ -277,6 +377,7 @@ $('quickBtn').addEventListener('click', async () => {
     if (searchCanceled) { r.net?.destroy(); return; } // bailed with Esc mid-search
     $('menu').classList.remove('searching');
     if (r.kind === 'join') {
+      migrationGen = 0;
       game.mode = 'client';
       adoptJoin(r.net, slotCode(r.slot));
       const plain = game.onWelcome;
@@ -287,6 +388,7 @@ $('quickBtn').addEventListener('click', async () => {
       };
       game.clientOnData(r.welcome); // replay the welcome through the normal path
     } else if (r.kind === 'host') {
+      migrationGen = 0;
       game.mode = 'host';
       game.rebuild(Math.floor(Math.random() * 1e9));
       adoptHost(r.net, slotCode(r.slot), { public: true, alreadyOpen: true });

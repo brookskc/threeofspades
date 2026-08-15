@@ -27,7 +27,7 @@
     border:2px solid rgba(255,255,255,.75); border-radius:4px; cursor:pointer;
     background:rgba(255,255,255,.06); transition:.2s; user-select:none; }
   .play:hover { background:rgba(255,255,255,.18); transform:translateY(-2px); }
-  .play.small { margin-top:0; padding:10px 26px; font-size:15px; }
+  .play.small { margin-top:16px; padding:10px 26px; font-size:15px; }
   .play.accent { margin-top:16px; border-color:#ffd97a; color:#ffd97a;
     font-size:20px; padding:14px 54px; }
   .play.accent:hover { background:rgba(255,217,122,.14); }
@@ -127,6 +127,31 @@
     background:radial-gradient(ellipse at center, transparent 62%, rgba(10,18,30,.20)); }
   #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
     font-size:15px; letter-spacing:2px; opacity:0; }
+
+  /* chat — lower left, above the vitals panel */
+  #chat { position:absolute; left:22px; bottom:102px; width:380px; max-width:44vw;
+    font-size:13px; }
+  #chatlog { display:flex; flex-direction:column; align-items:flex-start;
+    gap:4px; margin-bottom:6px; }
+  #chatlog div { background:rgba(10,14,22,.92); border-radius:4px;
+    padding:4px 10px; color:#fff; max-width:100%; overflow-wrap:break-word;
+    text-shadow:0 1px 2px rgba(0,0,0,.6); transition:opacity .8s; }
+  #chatlog div.faded { opacity:0; }
+  #chat.open #chatlog div { opacity:1; transition:none; }
+  #chatlog .tm { font-size:10px; font-weight:800; letter-spacing:1px;
+    color:#ffd97a; margin-right:7px; }
+  #chatlog .cn { font-weight:700; margin-right:7px; }
+  #chatrow { display:none; align-items:center; gap:8px;
+    background:rgba(10,14,22,.92); border:1px solid rgba(255,255,255,.28);
+    border-radius:4px; padding:6px 10px; pointer-events:auto; }
+  #chat.open #chatrow { display:flex; }
+  #chatscope { font-size:11px; font-weight:800; letter-spacing:1px;
+    color:#ffd97a; user-select:none; }
+  #chatin { flex:1; background:transparent; border:0; outline:0; color:#fff;
+    font:inherit; text-shadow:0 1px 2px rgba(0,0,0,.6); }
+  #chatkey { position:absolute; left:22px; bottom:80px; font-size:11px;
+    opacity:.45; letter-spacing:1px; }
+  #chat.open ~ #chatkey, #chat.haslog ~ #chatkey { opacity:0; }
 </style>
 <script src="./vendor/peerjs.min.js"></script>
 <script type="importmap">
@@ -156,6 +181,14 @@
     <div id="feed"></div>
     <div id="msg"></div>
     <div id="respawn"></div>
+    <div id="chat">
+      <div id="chatlog"></div>
+      <div id="chatrow">
+        <span id="chatscope">ALL</span>
+        <input id="chatin" maxlength="120" placeholder="message…" autocomplete="off">
+      </div>
+    </div>
+    <div id="chatkey">T chat · Y team</div>
   </div>
 
   <div class="screen" id="menu">
@@ -182,6 +215,7 @@
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 5 · Q · E</b> rifle · smg · spade · block · grenade &nbsp;·&nbsp; <b>R</b> reload</div>
       <div><b>CTRL</b> crouch — slower, steadier aim, and you cannot be walked off a ledge</div>
+      <div><b>T</b> chat the room &nbsp;·&nbsp; <b>Y</b> chat your team &nbsp;·&nbsp; <b>ENTER</b> send &nbsp;·&nbsp; redeploy takes 10s</div>
       <div><b>MISSION</b> steal the enemy flag, bring it home — first to 3 captures wins</div>
       <div><b>QUICK MATCH</b> drops you into the fullest public room with space — up to 8 players</div>
     </div>

@@ -12,11 +12,12 @@ let n = 0;        // name rotation
 let nextId = 0;   // stable identity for network snapshots
 
 export class Bot {
-  constructor(game, team) {
+  constructor(game, team, name = null) {
     this.game = game;
     this.team = team;
     this.id = nextId++;
-    this.name = NAMES[team][n++ % NAMES[team].length];
+    // Host migration restores fallen bots by name so their tags survive.
+    this.name = name ?? NAMES[team][n++ % NAMES[team].length];
     const p = game.spawnPoint(team);
     this.body = new Body(game.world, p.x, p.y, p.z);
     this.parts = makeSoldier(team === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
@@ -39,10 +40,12 @@ export class Bot {
     this.wanderT = 0;
     this.digT = 0;             // tunneling swing cooldown
     this.lastDig = -9;         // last shovel swing, game time
-    this.blocks = 12;          // combat engineering inventory
+    this.blocks = 16;          // combat engineering inventory (cover + bridges)
     this.buildT = 0;           // cooldown between throwing up cover
     this.coverT = 0;           // hold-and-fight timer behind fresh cover
     this.duckT = 0;            // duck rhythm: reloads and burst pauses
+    this.bridgeT = 0;          // plank-laying cooldown
+    this.lastBridge = -9;      // last plank placed, game time
     this.face = new THREE.Vector3(this.heading, 0, 0); // where the head points
     this.memoryT = 0;          // keeps tracking a target just out of sight
     this.responding = false;   // rushing to recover our dropped flag?
@@ -165,10 +168,33 @@ export class Bot {
     }
     const digging = g.time - this.lastDig < 0.9;
 
+    // --- bridging: never launch into a ravine we could span. If the column
+    // a pace ahead drops away deeper than a couple of blocks (and the goal
+    // isn't downhill anyway, where descending is the point), lay the next
+    // plank at foot level. A bridgelayer's pace keeps us from outrunning
+    // the plank cadence and walking off our own bridge tip. ---
+    this.bridgeT -= dt;
+    if (!this.target && dist > 2 && b.onGround && !b.inWater &&
+        this.blocks > 0 && dir.lengthSq() > 0 && this.bridgeT <= 0) {
+      const gx = Math.floor(b.pos.x + dir.x * 1.4);
+      const gz = Math.floor(b.pos.z + dir.z * 1.4);
+      let drop = 0;
+      for (let y = fy - 1; y >= fy - 4 && !w.solid(gx, y, gz); y--) drop++;
+      // Bridge only when the goal sits ABOVE the bottom of the drop ahead:
+      // a ravine between two banks qualifies (even when the far bank is
+      // lower); a valley we're descending into doesn't — walking down is
+      // the point there.
+      if (drop >= 3 && goal.y > fy - drop) {
+        this.bridgeT = 0.35;
+        if (g.tryBuild(this, gx, fy - 1, gz)) this.lastBridge = g.time;
+      }
+    }
+    const bridging = g.time - this.lastBridge < 0.9;
+
     const speed = b.inWater ? 2.6
       : this.target ? 3.4
-      : digging ? 2.2           // shovel pace: never outrun the swing
-      : this.responding ? 5.8   // urgency: our flag is on the ground
+      : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
+      : this.responding ? 5.8      // urgency: our flag is on the ground
       : 4.6;
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
@@ -321,7 +347,9 @@ export class Bot {
     this.sampleT = 0.4;
     this.digT = 0;
     this.lastDig = -9;
-    this.blocks = 12;
+    this.blocks = 16;
+    this.bridgeT = 0;
+    this.lastBridge = -9;
     this.buildT = 0;
     this.coverT = 0;
     this.duckT = 0;

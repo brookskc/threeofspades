@@ -49,6 +49,19 @@ channel. Joining mid-match is fine. Signaling (the initial introduction between
 browsers) rides the free PeerJS cloud; after that, gameplay traffic never
 leaves the peers.
 
+**If the host drops, the match doesn't.** Every client keeps a migration-ready
+replica — the world edit log plus the last full snapshot — and a heartbeat
+watchdog notices when the host goes silent (a killed tab sends no goodbye). The
+survivors converge on a deterministic fallback room, the lowest-ranked one
+promotes its replica to host mid-stride — bots, score, craters, and all — and
+the rest rejoin within seconds. If that host drops too, the baton passes again.
+Chat and redeploy timers carry on like nothing happened.
+
+**Chat is built in.** `T` talks to the whole room, `Y` talks to your team only
+(team chatter never crosses the lines — the host relays it only to teammates),
+`Enter` sends, `Esc` walks away. The box sits lower-left, dark and opaque with
+white text, and the soldier holds still while you type.
+
 ### How many players can it handle?
 
 - **Per room:** 8 humans, by design. The host's browser simulates everything,
@@ -103,7 +116,9 @@ steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
 taller than one block (single steps still pass, so slopes stay walkable) ·
 `LMB` fire/dig/place/throw · `RMB` aim · `1–5` / `Q`·`E` select tool (the
 grenade is slot 5 — three per life, one trickles back every 12 s) ·
-`R` reload · `Esc` pause (in a match: resume or back to the main menu)
+`R` reload · `T` / `Y` chat the room / your team · `Esc` pause (in a match:
+resume or back to the main menu). Death costs you **10 seconds** on the
+redeploy timer — make them count.
 
 ## Tech notes
 
@@ -118,7 +133,9 @@ grenade is slot 5 — three per life, one trickles back every 12 s) ·
 - **Bots** (`src/bots.js`) run a small sense–decide–act loop: acquire targets with
   line-of-sight checks, strafe while firing, path toward flags, and shovel through
   obstacles when stuck — swimming counts, so a bot that falls in the Pinefall
-  creek digs the bank into a staircase and climbs out, overhangs included. Bots
+  creek digs the bank into a staircase and climbs out, overhangs included. But
+  they'd rather not get their feet wet: a bot whose path ends at a ravine rim
+  lays a plank bridge ahead of itself and walks across at shovel pace. Bots
   caught in the open at rifle range throw up a three-wide knee wall, then fight
   from behind it — standing to fire, ducking to reload.
 - **Multiplayer** (`src/net.js`) wraps PeerJS in a host-authoritative star:
@@ -126,6 +143,10 @@ grenade is slot 5 — three per life, one trickles back every 12 s) ·
   snapshots with ~130 ms interpolation (`src/avatar.js`). Maps are
   seed-deterministic, so joiners regenerate the identical world locally and
   replay a compact edit log to catch up on every dug trench and crater.
+  **Host migration** (`src/main.js`) rides on that same edit log: on host
+  silence the clients elect a successor by peer-id rank, claim the derived
+  room `<code>-M<n>`, and rebuild the authoritative sim from the last
+  snapshot — the match survives its host.
 
 ## Run it locally
 
@@ -143,7 +164,7 @@ imports over `file://`. Any static server avoids this.)
 
 ## Roadmap
 
-- Classic 512² maps, more modes (TC), map seed selector, host migration.
+- Classic 512² maps, more modes (TC), map seed selector.
 
 ## License
 

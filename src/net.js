@@ -35,13 +35,27 @@ export class Net {
     net.peer.on('open', () => net.handlers.onOpen?.());
     net.peer.on('error', e => net.handlers.onError?.(e));
     net.peer.on('connection', conn => {
-      conn.on('open', () => net.handlers.onJoin?.(conn.peer, conn));
+      console.debug(`[net] incoming conn from ${conn.peer} (have ${net.conns.get(conn.peer)?.open})`);
+      conn.on('open', () => {
+        console.debug(`[net] conn open ${conn.peer}`);
+        // An open channel is proof of life — claim the map slot. A zombie
+        // channel from an abandoned knock never opens, so it can never
+        // steal the slot; whichever live channel opens last rightfully wins.
+        net.conns.set(conn.peer, conn);
+        net.handlers.onJoin?.(conn.peer, conn);
+      });
       conn.on('data', d => net.handlers.onData?.(conn.peer, d));
       const drop = () => {
-        if (net.conns.delete(conn.peer)) net.handlers.onLeave?.(conn.peer);
+        console.debug(`[net] conn drop ${conn.peer}`);
+        // Delete only if WE are the mapped connection: a zombie channel from
+        // an abandoned knock may outlive its replacement, and its late close
+        // must not evict the live one.
+        if (net.conns.get(conn.peer) === conn && net.conns.delete(conn.peer))
+          net.handlers.onLeave?.(conn.peer);
       };
-      conn.on('close', drop);
-      conn.on('error', drop);
+      conn.on('close', () => { console.debug(`[net] conn close ${conn.peer}`); drop(); });
+      conn.on('error', e => { console.debug(`[net] conn error ${conn.peer} ${e?.type ?? e}`); drop(); });
+      conn.on('iceStateChanged', s => console.debug(`[net] ice ${conn.peer} ${s}`));
       net.conns.set(conn.peer, conn);
     });
     return net;
@@ -78,16 +92,21 @@ export class Net {
         settled = true;
         clearTimeout(timer);
         peer.off('error', onErr);
+        // A failed knock must close its channel deterministically: an
+        // abandoned one can still complete the handshake later and shambling
+        // into the room as a zombie — half-open, never welcomed, and wedging
+        // the host's connection map entry for our peer id.
+        if (v.kind !== 'join') conn.close();
         resolve(v);
       };
-      const timer = setTimeout(() => { conn.close(); done({ kind: 'dead' }); }, timeoutMs);
+      const timer = setTimeout(() => done({ kind: 'dead' }), timeoutMs);
       const onErr = e => done({ kind: e.type === 'peer-unavailable' ? 'dead' : 'down' });
       peer.on('error', onErr); // the broker reports unknown room ids on the peer
       const conn = peer.connect(PREFIX + code, { reliable: true });
       conn.on('open', () => conn.send({ t: 'hi', name }));
       conn.on('data', d => {
         if (d.t === 'w') done({ kind: 'join', conn, welcome: d });
-        else if (d.t === 'full') { conn.close(); done({ kind: 'full' }); }
+        else if (d.t === 'full') done({ kind: 'full' });
       });
       conn.on('close', () => done({ kind: 'dead' }));
       conn.on('error', () => done({ kind: 'dead' }));
@@ -104,8 +123,8 @@ export class Net {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (v.kind !== 'host') net.destroy();
-        resolve(v);
+        resolve(v); // settle FIRST: if destroy() throws on a half-dead peer,
+        try { if (v.kind !== 'host') net.destroy(); } catch { /* already gone */ }
       };
       const timer = setTimeout(() => done({ kind: 'down' }), timeoutMs);
       net.peer.on('open', () => done({ kind: 'host', net }));
@@ -123,8 +142,9 @@ export class Net {
     window.__net = net; // debug handle
     peer.on('error', e => net.handlers.onError?.(e));
     conn.on('data', d => net.handlers.onData?.(d));
-    conn.on('close', () => net.handlers.onClose?.());
-    conn.on('error', () => net.handlers.onClose?.());
+    conn.on('close', () => { console.debug(`[net] guest conn close`); net.handlers.onClose?.(); });
+    conn.on('error', e => { console.debug(`[net] guest conn error ${e?.type ?? e}`); net.handlers.onClose?.(); });
+    conn.on('iceStateChanged', s => console.debug(`[net] guest ice ${s}`));
     return net;
   }
 
