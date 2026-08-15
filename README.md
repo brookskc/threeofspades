@@ -69,6 +69,9 @@ seed:
 | **PINEFALL** | Dense pine forest cut by a winding creek. Short sightlines, flanking routes, ambush country. |
 | **DUNES** | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. |
 
+The home screen shows them off itself — the menu backdrop is a slow orbit that
+cycles through all four maps, thirty seconds apiece, each with a fresh seed.
+
 ![Gameplay](docs/gameplay.png)
 
 ### Arsenal

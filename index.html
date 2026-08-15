@@ -49,6 +49,9 @@
     outline:none; }
   #lobbyStatus { margin-top:16px; font-size:14px; letter-spacing:1px; color:#ffd97a;
     min-height:20px; }
+  #mapname { position:absolute; left:22px; bottom:18px; font-size:12px;
+    letter-spacing:4px; opacity:.45; text-transform:uppercase; }
+  #mapname b { color:#ffd97a; font-weight:600; }
   #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
   #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
   #roomcode b { color:#ffd97a; letter-spacing:4px; }
@@ -149,6 +152,7 @@
       code <input id="codeInput" maxlength="4" placeholder="····">
       <span class="plink" id="joinBtn">join</span>
     </div>
+    <div id="mapname">now showing — <b>GREENBELT</b></div>
     <div class="controls">
       <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>

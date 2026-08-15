@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { initAudio } from './audio.js';
 import { SX, SZ } from './world.js';
+import { MAPS } from './mapgen.js';
 import { Net, makeCode, PUBLIC_SLOTS, slotCode } from './net.js';
 
 const $ = id => document.getElementById(id);
@@ -295,10 +296,19 @@ if (params.get('mp') === 'host') {
 // ---------------- loop ----------------
 const clock = new THREE.Clock();
 let menuT = Math.PI * 0.15;
+let menuMapT = 0; // seconds the current backdrop map has been showing
+// Test hook: ?mmt=2 rotates every 2s.
+const MENU_MAP_EVERY = parseInt(params.get('mmt'), 10) || 30;
+// The backdrop carousel only runs on the idle solo menu — never while
+// hosting (host world is authoritative) or connected as a client (a rebuild
+// would wipe the synced match). ?auto= disables it: tests drive the world
+// directly and would lose their terrain mid-scenario.
+const carouselOn = !params.get('auto');
 
 function frame() {
   requestAnimationFrame(frame);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const wallDt = clock.getDelta();          // real elapsed time
+  const dt = Math.min(wallDt, 0.05);        // sim step, capped for physics
 
   // The host is authoritative — the simulation must never pause, even while
   // the host's own menu is up, or every client freezes with it.
@@ -307,6 +317,17 @@ function frame() {
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;
+    // Rotate the backdrop across the four maps with a fresh seed each time.
+    if (carouselOn && game.mode === 'solo' && !net && !matchmaking) {
+      menuMapT += wallDt; // wall-clock: a stalled frame still counts its time
+      if (menuMapT >= MENU_MAP_EVERY) {
+        menuMapT = 0;
+        const next = (game.mapIndex + 1) % MAPS.length;
+        game.rebuild(Math.floor(Math.random() * 1e9), next);
+        game.player.vmRoot.visible = false; // rebuild respawns: no menu gun
+        $('mapname').innerHTML = `now showing — <b>${MAPS[next].name}</b>`;
+      }
+    }
     camera.position.set(
       SX / 2 + Math.cos(menuT) * 95,
       58,
