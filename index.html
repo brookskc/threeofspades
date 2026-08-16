@@ -73,8 +73,10 @@
   #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
   #roomcode b { color:#ffd97a; letter-spacing:4px; }
   .controls { margin-top:34px; font-size:13px; line-height:1.9; opacity:.7; }
-  .controls b { display:inline-block; min-width:120px; text-align:right;
-    margin-right:14px; color:#ffd97a; font-weight:600; }
+  /* Keys are plain inline bold — no fixed-width label column. Every line
+     centers by its own visible width, so the block sits dead-center under
+     the title instead of drifting right on invisible label padding. */
+  .controls b { color:#ffd97a; font-weight:600; }
   #endTitle { font-size:52px; font-weight:800; letter-spacing:4px; }
   #endDetail { margin-top:10px; font-size:16px; opacity:.75; }
   #endNote { margin-top:34px; font-size:13px; letter-spacing:3px; opacity:.5; }
