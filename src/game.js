@@ -1,7 +1,7 @@
 // game.js — orchestration: combat, flags, grenades, score, HUD.
 // Modes: 'solo' (local only), 'host' (authoritative, broadcasts), 'client' (thin).
 import * as THREE from 'three';
-import { VoxelWorld, SEA, BLOCK, PALETTE } from './world.js';
+import { VoxelWorld, SEA, SX, SY, SZ, BLOCK, PALETTE } from './world.js';
 import { generateMap, BASE, MAPS } from './mapgen.js';
 import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
@@ -187,6 +187,106 @@ const hud = {
     div._ft = setTimeout(() => div.classList.add('faded'), 11000);
     div._rt = setTimeout(() => div.remove(), 12000);
   },
+
+  // ---------------- minimap ----------------
+  // Terrain is prerendered to an offscreen canvas, one pixel per world
+  // column: surface block color shaded by height, depth-darkened water where
+  // the column drowns. Edits dirty single columns (world.onEdit); markers
+  // (bases, flags, you) redraw every frame over the cached terrain.
+  mapInit(world) {
+    const off = document.createElement('canvas');
+    off.width = SX; off.height = SZ;
+    this._mapOff = off;
+    this._mapCtx = off.getContext('2d');
+    this._mapImg = this._mapCtx.createImageData(SX, SZ);
+    this._mapDirty = new Set();
+    for (let z = 0; z < SZ; z++)
+      for (let x = 0; x < SX; x++) this._mapColumn(world, x, z);
+    this._mapCtx.putImageData(this._mapImg, 0, 0);
+  },
+  _mapColumn(world, x, z) {
+    const y = world.surface(x, z);
+    const i = (z * SX + x) * 4;
+    const d = this._mapImg.data;
+    let r, g, b;
+    if (y < SEA) {
+      const depth = Math.min(1, (SEA - y) / 8); // shallow glows, deep goes dark
+      r = 47 * (1 - 0.45 * depth); g = 111 * (1 - 0.40 * depth); b = 184 * (1 - 0.30 * depth);
+    } else {
+      const c = PALETTE[world.get(x, y, z)]?.color ?? 0x8a8d94;
+      const br = 0.70 + 0.55 * (y / SY); // ridges light, valleys dark
+      r = ((c >> 16) & 255) * br; g = ((c >> 8) & 255) * br; b = (c & 255) * br;
+    }
+    d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+  },
+  mapDirty(x, z) {
+    if (this._mapDirty) this._mapDirty.add(z * SX + x);
+  },
+  minimap(g) {
+    const cv = $('minimap');
+    if (!cv || !this._mapOff) return;
+    // Flush edited columns in one putImageData over their bounding box.
+    if (this._mapDirty.size) {
+      let x0 = SX, z0 = SZ, x1 = -1, z1 = -1;
+      for (const k of this._mapDirty) {
+        const x = k % SX, z = (k - x) / SX;
+        this._mapColumn(g.world, x, z);
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (z < z0) z0 = z; if (z > z1) z1 = z;
+      }
+      this._mapCtx.putImageData(this._mapImg, 0, 0, x0, z0, x1 - x0 + 1, z1 - z0 + 1);
+      this._mapDirty.clear();
+    }
+    const ctx = cv.getContext('2d');
+    const W = cv.width, s = W / SX;
+    ctx.clearRect(0, 0, W, W);
+    ctx.drawImage(this._mapOff, 0, 0, W, W);
+    // Flag stands: team-colored diamonds, always visible — your bearings.
+    for (const team of ['green', 'blue']) {
+      const st = g.flags[team].home;
+      const cx = st.x * s, cz = st.z * s;
+      ctx.fillStyle = team === 'blue' ? '#7d9bff' : '#8fd98f';
+      ctx.beginPath();
+      ctx.moveTo(cx, cz - 4); ctx.lineTo(cx + 4, cz);
+      ctx.lineTo(cx, cz + 4); ctx.lineTo(cx - 4, cz);
+      ctx.fill();
+    }
+    // Flags: solid dot at home, hollow when dropped, pulsing ring when carried.
+    for (const team of ['green', 'blue']) {
+      const f = g.flags[team];
+      const cx = f.pos.x * s, cz = f.pos.z * s;
+      const col = team === 'blue' ? '#7d9bff' : '#8fd98f';
+      if (f.state === 'carried') {
+        const r = 6 + 1.6 * Math.sin(g.time * 6);
+        ctx.strokeStyle = 'rgba(255,255,255,.9)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(cx, cz, r, 0, 7); ctx.stroke();
+      }
+      ctx.lineWidth = 1.2;
+      if (f.state === 'dropped') {
+        ctx.strokeStyle = col;
+        ctx.beginPath(); ctx.arc(cx, cz, 3, 0, 7); ctx.stroke();
+      } else {
+        ctx.fillStyle = col;
+        ctx.strokeStyle = 'rgba(255,255,255,.85)';
+        ctx.beginPath(); ctx.arc(cx, cz, 3, 0, 7); ctx.fill(); ctx.stroke();
+      }
+    }
+    // You: a white wedge pointed where you look. lookDir's ground projection
+    // is (cos yaw, -sin yaw) in world (x,z), and canvas z runs downward.
+    const p = g.player;
+    ctx.save();
+    ctx.translate(p.body.pos.x * s, p.body.pos.z * s);
+    ctx.rotate(-p.yaw);
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = 'rgba(8,12,20,.9)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(6, 0); ctx.lineTo(-4, 3.6); ctx.lineTo(-4, -3.6);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  },
 };
 
 // ---------------- chat controller ----------------
@@ -302,6 +402,8 @@ export class Game {
     this.world = new VoxelWorld(scene);
     this.mapIndex = 0;                   // MAPS rotation position
     generateMap(this.world, this.seed, this.mapIndex);
+    this.world.onEdit = (x, z) => hud.mapDirty(x, z);
+    hud.mapInit(this.world);
     this.effects = new Effects(scene);
     this.bots = [];                        // before Player: its first spawnPoint reads these
     this.player = new Player(this, camera, dom);
@@ -337,6 +439,8 @@ export class Game {
     this.mapIndex = map;
     this.world = new VoxelWorld(this.scene);
     generateMap(this.world, seed, map);
+    this.world.onEdit = (x, z) => hud.mapDirty(x, z);
+    hud.mapInit(this.world);
     // Bodies capture the world instance at construction; the player and any
     // remote proxies survive rebuild, so rebind them or they'd keep colliding
     // with the previous map while the new one renders on screen.
@@ -1116,6 +1220,7 @@ export class Game {
   update(dt) {
     this.time += dt;
     this.world.animateSky(this.time);
+    hud.minimap(this);
     if (this.mode === 'client') return this._clientUpdate(dt);
 
     if (this.player.alive) this.player.update(dt);

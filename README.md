@@ -123,7 +123,9 @@ taller than one block, though single steps still pass so slopes stay walkable)
 grenade is slot 5, three per life, one trickles back every 12 s) · `R` reload ·
 `T` / `Y` chat the room / your team · `Esc` pause (in a match: resume or back
 to the main menu). Death costs 10 seconds on the redeploy timer, for humans and
-bots alike, so clearing a base actually clears it.
+bots alike, so clearing a base actually clears it. A minimap in the top left
+shows the terrain (craters and all), both flag stands, the live position of
+each flag, and a wedge for you and which way you're facing.
 
 ## Tech notes
 

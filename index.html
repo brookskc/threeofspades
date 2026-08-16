@@ -72,6 +72,10 @@
   #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
   #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
   #roomcode b { color:#ffd97a; letter-spacing:4px; }
+  /* semi-transparent overview, top left under the room tag */
+  #minimap { position:absolute; left:22px; top:48px; width:168px; height:168px;
+    border-radius:6px; opacity:.85; background:rgba(10,14,22,.55);
+    box-shadow:0 0 0 1px rgba(255,255,255,.10); }
   .controls { margin-top:34px; font-size:13px; line-height:1.9; opacity:.7; }
   /* Keys are plain inline bold — no fixed-width label column. Every line
      centers by its own visible width, so the block sits dead-center under
@@ -167,6 +171,7 @@
   <div id="hud">
     <div id="crosshair"></div><div id="hitmark"></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
+    <canvas id="minimap" width="168" height="168"></canvas>
     <div class="panel" id="vitals">
       <div id="healthbar"><div id="healthfill"></div></div>
       <div id="healthnum">100 HP</div>

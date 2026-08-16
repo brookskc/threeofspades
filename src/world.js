@@ -114,6 +114,7 @@ export class VoxelWorld {
     if (x < 0 || y < 0 || z < 0 || x >= SX || y >= SY || z >= SZ) return false;
     this.data[idx(x, y, z)] = v;
     this.rebuildAt(x, z);
+    this.onEdit?.(x, z); // minimap: this column's pixel may have changed
     return true;
   }
 
@@ -248,6 +249,7 @@ export class VoxelWorld {
       const [cx2, cz2] = k.split(',').map(Number);
       this.buildChunk(cx2, cz2);
     }
+    if (this.onEdit) for (const p of removed) this.onEdit(p.x, p.z); // minimap
     return removed;
   }
 
