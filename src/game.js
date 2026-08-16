@@ -189,58 +189,95 @@ const hud = {
   },
 
   // ---------------- minimap ----------------
-  // Terrain is prerendered to an offscreen canvas, one pixel per world
-  // column: surface block color shaded by height, depth-darkened water where
-  // the column drowns. Edits dirty single columns (world.onEdit); markers
-  // (bases, flags, you) redraw every frame over the cached terrain.
+  // Chunky top-down view: the world is sampled into MAP_G×MAP_G cells of
+  // 4×4 blocks apiece, the tallest column winning so bridges and towers
+  // still show. One offscreen pixel per cell, then a nearest-neighbor
+  // upscale to the display canvas — crisp voxel squares, no bilinear blur.
+  // Brightness bands by height give a terraced look, and a cell standing
+  // well above its west/north neighbor catches light while a sunken one
+  // sits in shade, so cliffs and craters read as steps. Edits dirty single
+  // cells (world.onEdit); markers redraw every frame over the cached terrain.
   mapInit(world) {
+    const G = (this._mapG = 64), STEP = (this._mapStep = SX / G);
     const off = document.createElement('canvas');
-    off.width = SX; off.height = SZ;
+    off.width = G; off.height = G;
     this._mapOff = off;
     this._mapCtx = off.getContext('2d');
-    this._mapImg = this._mapCtx.createImageData(SX, SZ);
+    this._mapImg = this._mapCtx.createImageData(G, G);
     this._mapDirty = new Set();
-    for (let z = 0; z < SZ; z++)
-      for (let x = 0; x < SX; x++) this._mapColumn(world, x, z);
+    this._mapH = new Int16Array(G * G); // tallest surface per cell
+    for (let gz = 0; gz < G; gz++)       // row-major: west/north neighbors
+      for (let gx = 0; gx < G; gx++)     // are shaded before they are read
+        this._mapCell(world, gx, gz);
     this._mapCtx.putImageData(this._mapImg, 0, 0);
   },
-  _mapColumn(world, x, z) {
-    const y = world.surface(x, z);
-    const i = (z * SX + x) * 4;
+  _cellTop(world, gx, gz) {
+    const STEP = this._mapStep;
+    let top = -1, block = 0;
+    for (let dz = 0; dz < STEP; dz++)
+      for (let dx = 0; dx < STEP; dx++) {
+        const x = gx * STEP + dx, z = gz * STEP + dz;
+        const y = world.surface(x, z);
+        if (y > top) { top = y; block = world.get(x, y, z); }
+      }
+    this._mapH[gz * this._mapG + gx] = top;
+    return { top, block };
+  },
+  _mapCell(world, gx, gz) {
+    const G = this._mapG;
+    const { top, block } = this._cellTop(world, gx, gz);
+    const i = (gz * G + gx) * 4;
     const d = this._mapImg.data;
     let r, g, b;
-    if (y < SEA) {
-      const depth = Math.min(1, (SEA - y) / 8); // shallow glows, deep goes dark
-      r = 47 * (1 - 0.45 * depth); g = 111 * (1 - 0.40 * depth); b = 184 * (1 - 0.30 * depth);
+    if (top < SEA) {
+      const band = Math.min(3, (SEA - top) >> 1); // discrete depth steps
+      const f = 1 - 0.14 * band;
+      r = 47 * f; g = 111 * f; b = 184 * f;
     } else {
-      const c = PALETTE[world.get(x, y, z)]?.color ?? 0x8a8d94;
-      const br = 0.70 + 0.55 * (y / SY); // ridges light, valleys dark
-      r = ((c >> 16) & 255) * br; g = ((c >> 8) & 255) * br; b = (c & 255) * br;
+      const c = PALETTE[block]?.color ?? 0x8a8d94;
+      let br = 0.60 + 0.045 * Math.floor(top / 3); // terraced height bands
+      const west = gx > 0 ? this._mapH[gz * G + gx - 1] : top;
+      const north = gz > 0 ? this._mapH[(gz - 1) * G + gx] : top;
+      if (top - Math.min(west, north) >= 3) br += 0.10; // sunlit ledge
+      if (Math.max(west, north) - top >= 3) br -= 0.12; // shaded foot
+      r = Math.min(255, ((c >> 16) & 255) * br);
+      g = Math.min(255, ((c >> 8) & 255) * br);
+      b = Math.min(255, (c & 255) * br);
     }
     d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
   },
   mapDirty(x, z) {
-    if (this._mapDirty) this._mapDirty.add(z * SX + x);
+    if (!this._mapDirty) return;
+    const G = this._mapG, STEP = this._mapStep;
+    const gx = (x / STEP) | 0, gz = (z / STEP) | 0;
+    // The east/south neighbors shade off this cell's height too.
+    for (let dz = 0; dz <= 1; dz++)
+      for (let dx = 0; dx <= 1; dx++) {
+        const nx = gx + dx, nz = gz + dz;
+        if (nx < G && nz < G) this._mapDirty.add(nz * G + nx);
+      }
   },
   minimap(g) {
     const cv = $('minimap');
     if (!cv || !this._mapOff) return;
-    // Flush edited columns in one putImageData over their bounding box.
+    // Flush edited cells in one putImageData over their bounding box.
     if (this._mapDirty.size) {
-      let x0 = SX, z0 = SZ, x1 = -1, z1 = -1;
+      const G = this._mapG;
+      let x0 = G, z0 = G, x1 = -1, z1 = -1;
       for (const k of this._mapDirty) {
-        const x = k % SX, z = (k - x) / SX;
-        this._mapColumn(g.world, x, z);
-        if (x < x0) x0 = x; if (x > x1) x1 = x;
-        if (z < z0) z0 = z; if (z > z1) z1 = z;
+        const gx = k % G, gz = (k - gx) / G;
+        this._mapCell(g.world, gx, gz);
+        if (gx < x0) x0 = gx; if (gx > x1) x1 = gx;
+        if (gz < z0) z0 = gz; if (gz > z1) z1 = gz;
       }
       this._mapCtx.putImageData(this._mapImg, 0, 0, x0, z0, x1 - x0 + 1, z1 - z0 + 1);
       this._mapDirty.clear();
     }
     const ctx = cv.getContext('2d');
     const W = cv.width, s = W / SX;
+    ctx.imageSmoothingEnabled = false; // crisp voxel squares
     ctx.clearRect(0, 0, W, W);
-    ctx.drawImage(this._mapOff, 0, 0, W, W);
+    ctx.drawImage(this._mapOff, 0, 0, this._mapG, this._mapG, 0, 0, W, W);
     // Flag stands: team-colored diamonds, always visible — your bearings.
     for (const team of ['green', 'blue']) {
       const st = g.flags[team].home;
