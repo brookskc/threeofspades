@@ -26,11 +26,20 @@ function mulberry32(a) {
   };
 }
 
+// modes: which game modes the map supports. DUNES retired from the CTF
+// rotation (its long sniper lanes punish flag runs) but kept for deathmatch
+// and king of the hill, where the midfield mesa is a natural point.
+// hill: king-of-the-hill zone — center column and radius in blocks.
 export const MAPS = [
-  { key: 'island', name: 'GREENBELT' },
-  { key: 'beach',  name: 'BEACHHEAD' },
-  { key: 'forest', name: 'PINEFALL'  },
-  { key: 'desert', name: 'DUNES'     },
+  { key: 'island',  name: 'GREENBELT', modes: ['ctf', 'tdm'],        gen: null },
+  { key: 'beach',   name: 'BEACHHEAD', modes: ['ctf', 'tdm'],        gen: null },
+  { key: 'forest',  name: 'PINEFALL',  modes: ['ctf', 'tdm'],        gen: null },
+  { key: 'desert',  name: 'DUNES',     modes: ['tdm', 'koth'],       gen: null,
+    hill: { x: SX / 2, z: SZ / 2, r: 8 } },
+  { key: 'crown',   name: 'CROWN',     modes: ['koth', 'tdm'],       gen: null,
+    hill: { x: SX / 2, z: SZ / 2, r: 8 } },
+  { key: 'caldera', name: 'CALDERA',   modes: ['koth', 'tdm'],       gen: null,
+    hill: { x: SX / 2, z: SZ / 2, r: 8 } },
 ];
 
 // Mutated by each generator; game.js reads spawn points and flag stands here.
@@ -353,13 +362,147 @@ function genDesert(world, seed) {
   buildBase(world, height, 'blue');
 }
 
+const clamp01 = t => Math.min(1, Math.max(0, t));
+const ss = t => { t = clamp01(t); return t * t * (3 - 2 * t); };
+
+// ---------------------------------------------------------------- crown
+// Purpose-built king of the hill: a sheer-sided central plateau ringed by a
+// water moat, crossed by four causeways, crowned with a broken ring fort.
+// The plateau top is the hill. Symmetric, short sightlines up the ramps,
+// and the fort is stone you will absolutely crater by minute three.
+function genCrown(world, seed) {
+  const noise = makeNoise(seed);
+  const height = new Float32Array(SX * SZ);
+  const CX = SX / 2, CZ = SZ / 2, TOP = SEA + 20;
+
+  for (let z = 0; z < SZ; z++)
+    for (let x = 0; x < SX; x++) {
+      const dx = (x - CX) / (SX / 2), dz = (z - CZ) / (SZ / 2);
+      const island = Math.max(0, 1 - (dx * dx + dz * dz) * 1.05);
+      // Gentle lowlands — the crown has to dominate, so the field stays low.
+      const field = SEA + 2
+        + island * 8 * (0.6 * noise(x * 0.014, z * 0.014)
+                      + 0.4 * noise(x * 0.045, z * 0.045));
+      const d = Math.hypot(x - CX, z - CZ);
+      let h = field;
+      if (d < 16) h = TOP;                               // flat crown
+      else if (d < 24) h = TOP + (field - TOP) * ss((d - 16) / 8); // sheer skirt
+      if (d > 29 && d < 37) h = Math.min(h, SEA - 1);    // the moat
+      // Four causeways: ramp up the skirt, bridge over the moat.
+      const along = Math.max(Math.abs(x - CX), Math.abs(z - CZ));
+      const perp = Math.min(Math.abs(x - CX), Math.abs(z - CZ));
+      if (perp < 3.5 && along > 4 && along < 44) {
+        const t = clamp01((along - 16) / 24);
+        const target = TOP * (1 - t) + Math.max(field, SEA + 1.5) * t;
+        const b = clamp01((3.5 - perp) / 1.5);           // 1 centerline → 0 edge
+        h = h * (1 - b) + target * b;
+      }
+      height[at(x, z)] = Math.min(SY - 8, h);
+    }
+
+  flattenBases(height);
+  fillColumns(world, height, (x, z, h) => h <= SEA + 1 ? BLOCK.SAND : BLOCK.GRASS);
+
+  // The ring fort: a broken stone circle on the crown, gates on the four
+  // causeway mouths, stub towers on the diagonals.
+  const rnd = mulberry32(seed ^ 0xc20);
+  for (let a = 0; a < Math.PI * 2; a += 0.025) {
+    if (rnd() < 0.3) continue; // collapsed arcs
+    const wx = Math.round(CX + Math.cos(a) * 10), wz = Math.round(CZ + Math.sin(a) * 10);
+    if (Math.min(Math.abs(wx - CX), Math.abs(wz - CZ)) <= 1) continue; // gates
+    const wy = Math.floor(height[at(wx, wz)]);
+    const wallH = 3 + Math.floor(rnd() * 3);
+    for (let y = wy + 1; y <= wy + wallH; y++) world.data[(y * SZ + wz) * SX + wx] = BLOCK.STONE;
+  }
+  for (const [tx, tz] of [[-7, -7], [7, -7], [-7, 7], [7, 7]]) {
+    const px = CX + tx, pz = CZ + tz;
+    const py = Math.floor(height[at(px, pz)]);
+    for (let y = py + 1; y <= py + 6; y++)
+      for (let ox = -1; ox <= 1; ox++)
+        for (let oz = -1; oz <= 1; oz++)
+          if (rnd() > 0.15) world.data[(y * SZ + pz + oz) * SX + px + ox] = BLOCK.STONE;
+  }
+
+  buildBase(world, height, 'green');
+  buildBase(world, height, 'blue');
+}
+
+// ---------------------------------------------------------------- caldera
+// A volcanic crater: high rim all around, an ash bowl inside, and a rocky
+// knoll at the bottom — the hill. Two saddle gaps in the rim face the bases;
+// everywhere else you dig through or climb over. Snipers own the rim,
+// brawlers own the bowl.
+function genCaldera(world, seed) {
+  const noise = makeNoise(seed);
+  const height = new Float32Array(SX * SZ);
+  const CX = SX / 2, CZ = SZ / 2;
+
+  for (let z = 0; z < SZ; z++)
+    for (let x = 0; x < SX; x++) {
+      const plain = SEA + 6 + 6 * noise(x * 0.02, z * 0.02) + 3 * noise(x * 0.07, z * 0.07);
+      const bowl = SEA + 3 + 1.5 * noise(x * 0.09 + 9, z * 0.09 + 9);
+      const rimH = SEA + 22 + 4 * noise(x * 0.05 + 4, z * 0.05 + 4);
+      const d = Math.hypot(x - CX, z - CZ);
+      let h;
+      if (d < 38) h = bowl;
+      else if (d < 50) h = bowl + (rimH - bowl) * ss((d - 38) / 12);   // inner wall
+      else if (d < 64) h = rimH;                                       // the rim
+      else if (d < 78) h = rimH + (plain - rimH) * ss((d - 64) / 14);  // outer falloff
+      else h = plain;
+      // Saddle gaps facing the bases (east/west): passable at a climb.
+      if (Math.abs(z - CZ) < 8 && d > 36 && d < 80) {
+        const saddle = SEA + 9 + 2 * noise(x * 0.08, z * 0.08);
+        const b = clamp01((8 - Math.abs(z - CZ)) / 4);
+        h = h * (1 - b) + Math.min(h, saddle) * b;
+      }
+      // The knoll: a flat rocky rise at the very bottom — the hill.
+      if (d < 7) h = SEA + 10;
+      else if (d < 14) h = (SEA + 10) + (h - (SEA + 10)) * ss((d - 7) / 7);
+      height[at(x, z)] = Math.min(SY - 8, h);
+    }
+
+  flattenBases(height);
+  // Scorched ground: stone outcrops breaking through packed ash.
+  fillColumns(world, height,
+    (x, z) => noise(x * 0.11 + 3, z * 0.11 + 3) > 0.62 ? BLOCK.STONE : BLOCK.DIRT);
+
+  // Basalt pillars scattered across the bowl — cover, and chewable.
+  const rnd = mulberry32(seed ^ 0xca1de);
+  for (let i = 0; i < 14; i++) {
+    const a = rnd() * Math.PI * 2, d = 15 + rnd() * 20;
+    const px = Math.round(CX + Math.cos(a) * d), pz = Math.round(CZ + Math.sin(a) * d);
+    const py = Math.floor(height[at(px, pz)]);
+    const ph = 3 + Math.floor(rnd() * 4);
+    for (let y = py + 1; y <= py + ph; y++)
+      world.data[(y * SZ + pz) * SX + px] = BLOCK.STONE;
+    if (rnd() < 0.5) // some stand in pairs
+      for (let y = py + 1; y <= py + ph - 1; y++)
+        world.data[(y * SZ + pz + 1) * SX + px + 1] = BLOCK.STONE;
+  }
+
+  buildBase(world, height, 'green');
+  buildBase(world, height, 'blue');
+}
+
+MAPS[0].gen = genIsland;
+MAPS[1].gen = genBeach;
+MAPS[2].gen = genForest;
+MAPS[3].gen = genDesert;
+MAPS[4].gen = genCrown;
+MAPS[5].gen = genCaldera;
+
 // ---------------------------------------------------------------- entry
 export function generateMap(world, seed = 1979, mapIndex = 0) {
   // Re-anchor the bases to this map's defaults before the generator runs.
   BASE.green.x = 36; BASE.green.z = SZ / 2; BASE.green.plateau = 16;
   BASE.blue.x = SX - 36; BASE.blue.z = SZ / 2; BASE.blue.plateau = 16;
   world.data.fill(0);
-  [genIsland, genBeach, genForest, genDesert][mapIndex % MAPS.length](world, seed);
+  MAPS[mapIndex % MAPS.length].gen(world, seed);
   world.buildAll();
   return mapIndex % MAPS.length;
+}
+
+// Map indices supporting a mode, in rotation order.
+export function mapsForMode(mode) {
+  return MAPS.map((m, i) => i).filter(i => MAPS[i].modes.includes(mode));
 }

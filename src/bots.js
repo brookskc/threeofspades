@@ -56,6 +56,7 @@ export class Bot {
     const g = this.game;
     this.responding = false;
     if (this.carrier) return g.standOf(this.team);                   // run it home
+    if (g.hill) return g.hill.pos;                                   // koth: take the point
     const own = g.flags?.[this.team];
     if (!own) return g.standOf(g.enemyOf(this.team));                // deathmatch: hunt
     // Flag defense: the two closest free bots drop everything — sprint at the
@@ -271,8 +272,8 @@ export class Bot {
 
   _acquire() {
     // A designated defender tunnel-visions the flag thief, even from afar.
-    const own = this.game.flags[this.team];
-    if (this.responding && own.state === 'carried' && own.carrier?.alive) {
+    const own = this.game.flags?.[this.team]; // null in flagless modes (tdm/koth)
+    if (this.responding && own?.state === 'carried' && own.carrier?.alive) {
       const c = own.carrier;
       if (this.body.pos.distanceTo(c.body.pos) < 64 &&
           this.game.losClear(this.body.eye(), c.body.eye())) return c;

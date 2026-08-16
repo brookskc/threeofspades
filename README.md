@@ -12,14 +12,21 @@
 
 Green vs. Blue on fully destructible voxel battlefields. Dig trenches with
 your spade, wall off chokepoints with blocks, crater the midfield with
-grenades; even ordinary gunfire chews through cover. Two modes: capture the
-flag (steal the enemy flag and run it home, first to 3 captures wins) or team
-deathmatch (no flags, pure firefight, first to 20 kills).
+grenades; even ordinary gunfire chews through cover. Three modes: capture the
+flag (steal the enemy flag and run it home, first to 3 captures wins), team
+deathmatch (no flags, pure firefight, first to 20 kills), and king of the hill
+(one neutral point at midfield; stand on it alone for 4 seconds to claim it,
+then it banks a second of hold time for every second it stays yours, even
+while the enemy fights to take it back; first team to 2:00 of hold time wins).
 
-Every room runs with AI soldiers who hunt flags, strafe, and will literally dig
-through your walls, so a quiet room still plays a full match while it waits for
-humans to drop in. When they do, bots step aside to make room, and step back in
-if someone leaves.
+King of the hill is where the terrain matters most: the point itself is
+ground you can reshape. Wall it off and dare them to dig in, or blow the
+approaches open and hold the rubble.
+
+Every room runs with AI soldiers who hunt flags, contest hills, strafe, and
+will literally dig through your walls, so a quiet room still plays a full
+match while it waits for humans to drop in. When they do, bots step aside to
+make room, and step back in if someone leaves.
 
 ## Multiplayer
 
@@ -48,9 +55,13 @@ open seats, fullest room first. Click a row and you drop straight in.
 
 However you end up hosting (a private room, or a quick match that claims an
 empty slot), the menu's *when you host* picks apply: pin a favorite map or let
-it rotate, and choose capture the flag or team deathmatch. Host migration is
-the exception: a promoted replica keeps the room's running map and mode, since
-changing the rules mid-match would be cheating.
+it rotate, and choose capture the flag, team deathmatch, or king of the hill.
+The map list follows the mode, since each mode draws from its own pool. Quick
+match itself is mode-blind on purpose: it piles you into the fullest open room
+whatever its mode, so the player pool never splits. Your picks decide the
+matches you host, not the ones you join. Host migration is the exception: a
+promoted replica keeps the room's running map and mode, since changing the
+rules mid-match would be cheating.
 
 Want a private lobby instead? The small `host` / `join` links under the main
 button give you a 4-letter room code to share with friends.
@@ -93,23 +104,26 @@ codes, each an independent battlefield.
 
 ## Maps
 
-Four themed battlefields, seeded so every player generates the identical world.
-After each match the room automatically rotates to the next map with a fresh
-seed:
+Six themed battlefields, seeded so every player generates the identical world.
+Each mode rotates through its own pool, and after each match the room moves to
+the next map in that pool with a fresh seed:
 
-| Map | Theme |
-|---|---|
-| **GREENBELT** | The classic rolling green island. Open hills and midfield ridgelines; pure arena CTF. |
-| **BEACHHEAD** | D-Day. Green team storms out of landing craft onto sand thick with tank traps, past their own beach-head pillbox and a trench cut into the bluff; Blue holds the heights in concrete MG pillboxes with firing slits. |
-| **PINEFALL** | Dense pine forest cut by a wide, winding creek. Short sightlines and flanking routes, ambush country. |
-| **DUNES** | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. |
+| Map | Modes | Theme |
+|---|---|---|
+| **GREENBELT** | CTF · TDM | The classic rolling green island. Open hills and midfield ridgelines; pure arena CTF. |
+| **BEACHHEAD** | CTF · TDM | D-Day. Green team storms out of landing craft onto sand thick with tank traps, past their own beach-head pillbox and a trench cut into the bluff; Blue holds the heights in concrete MG pillboxes with firing slits. |
+| **PINEFALL** | CTF · TDM | Dense pine forest cut by a wide, winding creek. Short sightlines and flanking routes, ambush country. |
+| **DUNES** | TDM · KOTH | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. Retired from the CTF pool (those lanes punished flag runs), it still hosts deathmatch and king of the hill. |
+| **CROWN** | KOTH · TDM | A flat-topped plateau ringed by a moat and crossed by four causeways. The hill sits inside a broken ring fort at the top, stub towers on the corners. |
+| **CALDERA** | KOTH · TDM | A scorched volcanic crater breached by saddle gaps east and west. Basalt pillars stud the bowl; the hill crowns a knoll at the center. |
 
 | ![GREENBELT](docs/map-greenbelt.png) | ![BEACHHEAD](docs/map-beachhead.png) |
 |---|---|
 | ![PINEFALL](docs/map-pinefall.png) | ![DUNES](docs/map-dunes.png) |
+| ![CROWN](docs/map-crown.png) | ![CALDERA](docs/map-caldera.png) |
 
 The home screen shows them off itself: the menu backdrop is a slow orbit that
-cycles through all four maps, thirty seconds apiece, each with a fresh seed.
+cycles through all six maps, thirty seconds apiece, each with a fresh seed.
 
 ![Gameplay](docs/gameplay.png)
 
@@ -137,8 +151,9 @@ grenade is slot 5, three per life, one trickles back every 12 s) · `R` reload �
 `T` / `Y` chat the room / your team · `Esc` pause (in a match: resume or back
 to the main menu). Death costs 10 seconds on the redeploy timer, for humans and
 bots alike, so clearing a base actually clears it. A minimap in the top left
-shows the terrain (craters and all), both flag stands, the live position of
-each flag, and a wedge for you and which way you're facing.
+shows the terrain (craters and all), both flag stands and the live position of
+each flag (or the hill ring, tinted by who holds it and flashing white while
+contested), and a wedge for you and which way you're facing.
 
 ## Tech notes
 
@@ -189,7 +204,7 @@ imports over `file://`. Any static server avoids this.)
 
 ## Roadmap
 
-- Classic 512² maps, more modes (TC, king of the hill), map seed selector.
+- Classic 512² maps, territorial control, map seed selector.
 
 ## License
 

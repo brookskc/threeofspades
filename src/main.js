@@ -309,33 +309,45 @@ function adoptJoin(n, code) {
 // only exist in CTF. ?map=2&mode=tdm are test hooks that force the selects.
 const mapPref = $('mapPref'), modePref = $('modePref');
 {
-  const rot = document.createElement('option');
-  rot.value = '-1'; rot.textContent = 'rotate';
-  mapPref.appendChild(rot);
-  MAPS.forEach((m, i) => {
-    const o = document.createElement('option');
-    o.value = String(i); o.textContent = m.name;
-    mapPref.appendChild(o);
-  });
-  mapPref.value = localStorage.getItem('tos.map') ?? '-1';
+  // The map list follows the mode: each map declares which modes it supports
+  // (DUNES is retired from the CTF rotation; CROWN and CALDERA are hill-first).
+  function rebuildMapPref(keep = mapPref.value) {
+    mapPref.innerHTML = '';
+    const rot = document.createElement('option');
+    rot.value = '-1'; rot.textContent = 'rotate';
+    mapPref.appendChild(rot);
+    MAPS.forEach((m, i) => {
+      if (!m.modes.includes(modePref.value)) return;
+      const o = document.createElement('option');
+      o.value = String(i); o.textContent = m.name;
+      mapPref.appendChild(o);
+    });
+    mapPref.value = [...mapPref.options].some(o => o.value === keep) ? keep : '-1';
+  }
   modePref.value = localStorage.getItem('tos.mode') ?? 'ctf';
+  rebuildMapPref(localStorage.getItem('tos.map') ?? '-1');
   const save = () => {
     localStorage.setItem('tos.map', mapPref.value);
     localStorage.setItem('tos.mode', modePref.value);
   };
   mapPref.addEventListener('change', save);
-  modePref.addEventListener('change', save);
+  modePref.addEventListener('change', () => { rebuildMapPref(); save(); });
+  if (params.get('mode')) modePref.value = params.get('mode');
+  rebuildMapPref();
   const pm = parseInt(params.get('map'), 10);
   if (Number.isInteger(pm) && pm >= 0 && pm < MAPS.length) mapPref.value = String(pm);
-  if (params.get('mode')) modePref.value = params.get('mode');
 }
 
-// Returns the map index to start the new room on.
+// Returns the map index to start the new room on: the pinned map if it's
+// mode-compatible, else a random pick from the maps this mode supports.
 function applyHostPrefs() {
+  const mode = ['ctf', 'tdm', 'koth'].includes(modePref.value) ? modePref.value : 'ctf';
+  game.gameMode = mode;
   const v = parseInt(mapPref.value, 10);
-  game.mapLock = (v >= 0 && v < MAPS.length) ? v : null;
-  game.gameMode = modePref.value === 'tdm' ? 'tdm' : 'ctf';
-  return game.mapLock ?? Math.floor(Math.random() * MAPS.length);
+  game.mapLock = (v >= 0 && MAPS[v]?.modes.includes(mode)) ? v : null;
+  if (game.mapLock != null) return game.mapLock;
+  const pool = MAPS.map((m, i) => i).filter(i => MAPS[i].modes.includes(mode));
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 $('hostBtn').addEventListener('click', () => {
@@ -459,8 +471,12 @@ function roomRow(room) {
   map.textContent = MAPS[room.map]?.name ?? 'UNKNOWN MAP';
   const meta = document.createElement('div');
   meta.className = 'bmeta';
-  const unit = room.mode === 'tdm' ? 'kills' : 'captures';
-  meta.textContent = `${room.mode === 'tdm' ? 'team deathmatch' : 'capture the flag'} · ${room.g} — ${room.b} ${unit}`;
+  const modeName = room.mode === 'tdm' ? 'team deathmatch'
+    : room.mode === 'koth' ? 'king of the hill' : 'capture the flag';
+  const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const score = room.mode === 'koth' ? `${clock(room.g)} — ${clock(room.b)} held`
+    : room.mode === 'tdm' ? `${room.g} — ${room.b} kills` : `${room.g} — ${room.b} captures`;
+  meta.textContent = `${modeName} · ${score}`;
   const names = document.createElement('div');
   names.className = 'bnames';
   names.textContent = room.names.join(' · ');
@@ -635,7 +651,7 @@ function frame() {
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;
-    // Rotate the backdrop across the four maps with a fresh seed each time.
+    // Rotate the backdrop across every map with a fresh seed each time.
     if (carouselOn && game.mode === 'solo' && !net && !matchmaking) {
       menuMapT += wallDt; // wall-clock: a stalled frame still counts its time
       if (menuMapT >= MENU_MAP_EVERY) {

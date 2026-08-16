@@ -2,7 +2,7 @@
 // Modes: 'solo' (local only), 'host' (authoritative, broadcasts), 'client' (thin).
 import * as THREE from 'three';
 import { VoxelWorld, SEA, SX, SY, SZ, BLOCK, PALETTE } from './world.js';
-import { generateMap, BASE, MAPS } from './mapgen.js';
+import { generateMap, BASE, MAPS, mapsForMode } from './mapgen.js';
 import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
 import { Effects } from './effects.js';
@@ -14,6 +14,12 @@ const WIN_SCORE = 3;
 // Team deathmatch: no flags, kills are points. ?killcap= lowers the bar for tests.
 const killcapParam = parseInt(new URLSearchParams(location.search).get('killcap'), 10);
 const KILL_LIMIT = Number.isInteger(killcapParam) ? Math.max(2, killcapParam) : 20;
+// King of the hill: own the point to accrue hold time; first to HOLD_LIMIT
+// seconds wins. Flipping a held point takes CAP_TIME uncontested seconds on
+// it. ?kothtime= shrinks the clock for tests.
+const kothtimeParam = parseInt(new URLSearchParams(location.search).get('kothtime'), 10);
+const HOLD_LIMIT = Number.isInteger(kothtimeParam) ? Math.max(10, kothtimeParam) : 120;
+const CAP_TIME = 4;
 const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
 // A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
 // blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
@@ -120,12 +126,22 @@ const hud = {
       ? 'linear-gradient(90deg,#5db85d,#8fd98f)' : 'linear-gradient(90deg,#c0392b,#e74c3c)';
   },
   score(g) {
-    const next =
-      `<span class="g">GREEN ${g.captures.green}</span><span style="opacity:.4">—</span><span class="b">${g.captures.blue} BLUE</span>`;
+    const next = g.hill
+      ? `<span class="g">GREEN ${holdClock(g.captures.green)}</span><span style="opacity:.4">—</span><span class="b">${holdClock(g.captures.blue)} BLUE</span>`
+      : `<span class="g">GREEN ${g.captures.green}</span><span style="opacity:.4">—</span><span class="b">${g.captures.blue} BLUE</span>`;
     if (next !== this._lastScore) { this._lastScore = next; $('score').innerHTML = next; }
     this._flagState(g);
   },
   _flagState(g) {
+    if (g.hill) { // king of the hill: who owns the point, who's taking it
+      const h = g.hill;
+      const text = h.contested ? 'CONTESTED'
+        : h.progress > 0.1 ? `${h.capTeam.toUpperCase()} CAPTURING ${Math.round(h.progress / CAP_TIME * 100)}%`
+        : h.owner ? `${h.owner.toUpperCase()} HOLDS THE HILL`
+        : `hold the hill for ${holdClock(HOLD_LIMIT)} to win`;
+      if (text !== this._lastFlags) { this._lastFlags = text; $('flagstate').textContent = text; }
+      return;
+    }
     if (!g.flags) { // team deathmatch: kills are the score
       const text = `first to ${KILL_LIMIT} kills`;
       if (text !== this._lastFlags) { this._lastFlags = text; $('flagstate').textContent = text; }
@@ -319,6 +335,27 @@ const hud = {
         ctx.beginPath(); ctx.arc(cx, cz, 3, 0, 7); ctx.fill(); ctx.stroke();
       }
     }
+    // King of the hill: the point as a ground ring, tinted by the owner,
+    // pulsing while contested. It reads through craters because it's drawn
+    // over the terrain, not into it.
+    if (g.hill) {
+      const h = g.hill;
+      const cx = h.pos.x * s, cz = h.pos.z * s;
+      const col = h.owner === 'blue' ? '#7d9bff' : h.owner === 'green' ? '#8fd98f' : '#e8ecf2';
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(cx, cz, h.r * s, 0, 7); ctx.stroke();
+      if (h.contested) {
+        const r = h.r * s + 2 + 1.6 * Math.sin(g.time * 6);
+        ctx.strokeStyle = 'rgba(255,255,255,.9)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(cx, cz, r, 0, 7); ctx.stroke();
+      }
+      ctx.fillStyle = col;
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath(); ctx.arc(cx, cz, 2.4, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
     // You: a white wedge pointed where you look. lookDir's ground projection
     // is (cos yaw, -sin yaw) in world (x,z), and canvas z runs downward.
     const p = g.player;
@@ -379,6 +416,9 @@ class Chat {
     if (text) this.game.sendChat(text, this.scope);
   }
 }
+
+// Hold seconds -> "1:32" for the koth score line.
+const holdClock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 const nameSpan = e =>
   `<span style="color:${e.team === 'blue' ? '#8fa8ee' : '#8fd98f'}">${e.name}</span>`;
@@ -460,8 +500,9 @@ export class Game {
 
     if (this.mode !== 'client') this._spawnBots();
 
-    this.gameMode = 'ctf';             // 'ctf' | 'tdm' — set before rebuild()
+    this.gameMode = 'ctf';             // 'ctf' | 'tdm' | 'koth' — set before rebuild()
     this.mapLock = null;               // host map pref: fixed index, or null = rotate
+    this.hill = null;                  // koth: { pos, r, owner, progress, contested }
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.captures = { green: 0, blue: 0 };
     this.grenades = [];
@@ -495,9 +536,16 @@ export class Game {
     // with the previous map while the new one renders on screen.
     this.player.body.world = this.world;
     for (const rp of this.remote.values()) rp.body.world = this.world;
-    // Deathmatch plays without flags — kills are the score there.
-    this.flags = this.gameMode === 'tdm' ? null
-      : { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
+    // Only capture-the-flag has flags; deathmatch and king of the hill don't.
+    this.flags = this.gameMode === 'ctf'
+      ? { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') } : null;
+    // King of the hill: the zone rides the live terrain, so only the center
+    // and radius are fixed; the y-band is re-read per tick as craters form.
+    const hd = MAPS[this.mapIndex].hill ?? { x: SX / 2, z: SZ / 2, r: 8 };
+    this.hill = this.gameMode === 'koth' && hd
+      ? { pos: new THREE.Vector3(hd.x + 0.5, this.world.surface(hd.x, hd.z), hd.z + 0.5),
+          r: hd.r, owner: null, progress: 0, contested: false, capTeam: null }
+      : null;
     this.bots = [];
     if (this.mode !== 'client') this._spawnBots();
     this.captures = { green: 0, blue: 0 };
@@ -906,6 +954,48 @@ export class Game {
     hud.score(this);
   }
 
+  // ---------------- king of the hill ----------------
+  // One point at map center. Stand on it alone for CAP_TIME seconds to take
+  // it (or to flip it); once owned, the owner's clock accrues hold time
+  // whether or not anyone is standing there — you lose it only when the
+  // enemy flips it. Contested (both teams on the point) freezes a capture
+  // in progress but doesn't undo it. First to HOLD_LIMIT seconds of hold
+  // wins. "On the point" means inside the radius AND near the local surface
+  // — towers above and tunnels below don't count, but a cratered hill does.
+  _updateHill(dt) {
+    const h = this.hill;
+    let g = 0, b = 0;
+    for (const e of this.entities()) {
+      if (!e.alive) continue;
+      const dx = e.body.pos.x - h.pos.x, dz = e.body.pos.z - h.pos.z;
+      if (dx * dx + dz * dz > h.r * h.r) continue;
+      const surf = this.world.surface(Math.floor(e.body.pos.x), Math.floor(e.body.pos.z));
+      if (e.body.pos.y < surf - 4 || e.body.pos.y > surf + 6) continue;
+      if (e.team === 'green') g++; else b++;
+    }
+    h.contested = g > 0 && b > 0;
+    const sole = g > 0 && b === 0 ? 'green' : b > 0 && g === 0 ? 'blue' : null;
+    if (sole) h.capTeam = sole;
+    if (sole && sole !== h.owner) {
+      h.progress += dt;
+      if (h.progress >= CAP_TIME) {
+        h.owner = sole;
+        h.progress = 0;
+        sfx.capture();
+        this.feed(sole === 'green' ? '<b>GREEN</b> holds the hill' : '<b>BLUE</b> holds the hill');
+        this.message(sole === 'green' ? 'GREEN HOLDS THE HILL' : 'BLUE HOLDS THE HILL',
+          sole === 'green' ? '#8fd98f' : '#8fa8ee');
+      }
+    } else if (!h.contested && h.progress > 0) {
+      h.progress = Math.max(0, h.progress - dt * 1.5); // abandoned or owner-only: decay
+    }
+    if (h.owner && !this.over) {
+      this.captures[h.owner] += dt; // hold seconds (floats; displayed as clocks)
+      if (this.captures[h.owner] >= HOLD_LIMIT) this._end(h.owner);
+    }
+    hud.score(this);
+  }
+
   _end(winner) {
     if (this.over) return;
     this.over = true;
@@ -915,20 +1005,28 @@ export class Game {
     const won = winner === this.player.team;
     $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
     $('endTitle').style.color = won ? '#8fd98f' : '#e74c3c';
-    const next = MAPS[this.mapLock ?? (this.mapIndex + 1) % MAPS.length].name;
-    $('endDetail').textContent =
-      `${winner.toUpperCase()} wins ${this.captures.green} — ${this.captures.blue}` +
-      ` · next up: ${next}`;
+    const next = MAPS[this._nextMap()].name;
+    const score = this.hill
+      ? `held the hill ${holdClock(this.captures.green)} — ${holdClock(this.captures.blue)}`
+      : `wins ${this.captures.green} — ${this.captures.blue}`;
+    $('endDetail').textContent = `${winner.toUpperCase()} ${score} · next up: ${next}`;
     $('end').classList.remove('hidden');
     if (!won) sfx.lose();
     // The room rotates maps on its own a few seconds after the final capture.
     if (this.mode !== 'client') this._rotateT = 7;
   }
 
+  // Next map in the rotation for the CURRENT mode: a host pin wins if it's
+  // mode-compatible, otherwise cycle the maps that support this mode.
+  _nextMap() {
+    if (this.mapLock != null && MAPS[this.mapLock].modes.includes(this.gameMode))
+      return this.mapLock;
+    const pool = mapsForMode(this.gameMode);
+    return pool[(pool.indexOf(this.mapIndex) + 1) % pool.length];
+  }
+
   _rotate() {
-    // A host who pinned a map in the lobby keeps it every match; otherwise
-    // the room rotates through all four.
-    const map = this.mapLock ?? (this.mapIndex + 1) % MAPS.length;
+    const map = this._nextMap();
     const seed = Math.floor(Math.random() * 1e9);
     if (this.mode === 'host')
       this.net.broadcast({ t: 'e', k: 'restart', map, seed });
@@ -1055,6 +1153,12 @@ export class Game {
         else { f.state = 'dropped'; f.carrier = null; f.dropTimer = 30; }
       }
     }
+    // The hill keeps its owner and capture progress across the handover.
+    if (this.hill && this._hillRow) {
+      this.hill.owner = this._hillRow[0];
+      this.hill.progress = this._hillRow[1];
+      this.hill.capTeam = this._hillRow[3];
+    }
     // A death mid-handover still gets its respawn; a finished match still
     // gets its rotation.
     if (!this.player.alive) this.respawnTimers.set(this.player, REDEPLOY);
@@ -1121,7 +1225,9 @@ export class Game {
         g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
         b: [FLAG_CODE[this.flags.blue.state], ...arr(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
       },
-      c: [this.captures.green, this.captures.blue],
+      h: this.hill && [this.hill.owner, Math.round(this.hill.progress * 10) / 10,
+        this.hill.contested ? 1 : 0, this.hill.capTeam],
+      c: [Math.round(this.captures.green * 10) / 10, Math.round(this.captures.blue * 10) / 10],
       g: this.grenades.map(g => arr(g.pos)),
       o: this.over ? 1 : 0,
     };
@@ -1198,10 +1304,18 @@ export class Game {
         flag.pos.set(f[1], f[2], f[3]);
         flag.dropTimer = f[4];
       }
+    this._hillRow = d.h ?? null; // kept raw: a promoted replica restores it
+    if (d.h && this.hill) {
+      this.hill.owner = d.h[0];
+      this.hill.progress = d.h[1];
+      this.hill.contested = !!d.h[2];
+      this.hill.capTeam = d.h[3];
+    }
     this.captures.green = d.c[0];
     this.captures.blue = d.c[1];
     hud.score(this);
-    const limit = this.gameMode === 'tdm' ? KILL_LIMIT : WIN_SCORE;
+    const limit = this.gameMode === 'tdm' ? KILL_LIMIT
+      : this.gameMode === 'koth' ? HOLD_LIMIT : WIN_SCORE;
     if (d.o && !this.over) this._end(d.c[0] >= limit ? 'green' : 'blue');
     this._lastGrenades = d.g;
   }
@@ -1317,6 +1431,7 @@ export class Game {
     if (!this.over) {
       this._updateGrenades(dt);
       if (this.flags) this._updateFlags(dt);
+      if (this.hill) this._updateHill(dt);
     } else if (this._rotateT != null) {
       this._rotateT -= dt;
       if (this._rotateT <= 0) { this._rotateT = null; this._rotate(); }
