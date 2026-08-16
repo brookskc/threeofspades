@@ -11,6 +11,9 @@ import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
+// Team deathmatch: no flags, kills are points. ?killcap= lowers the bar for tests.
+const killcapParam = parseInt(new URLSearchParams(location.search).get('killcap'), 10);
+const KILL_LIMIT = Number.isInteger(killcapParam) ? Math.max(2, killcapParam) : 20;
 const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
 // A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
 // blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
@@ -123,6 +126,11 @@ const hud = {
     this._flagState(g);
   },
   _flagState(g) {
+    if (!g.flags) { // team deathmatch: kills are the score
+      const text = `first to ${KILL_LIMIT} kills`;
+      if (text !== this._lastFlags) { this._lastFlags = text; $('flagstate').textContent = text; }
+      return;
+    }
     const parts = [];
     for (const team of ['green', 'blue']) {
       const f = g.flags[team];
@@ -278,10 +286,11 @@ const hud = {
     ctx.imageSmoothingEnabled = false; // crisp voxel squares
     ctx.clearRect(0, 0, W, W);
     ctx.drawImage(this._mapOff, 0, 0, this._mapG, this._mapG, 0, 0, W, W);
-    // Flag stands: team-colored diamonds, always visible — your bearings.
+    // Base plateaus: team-colored diamonds, always visible — your bearings.
+    // Read from BASE rather than the flags so deathmatch (flagless) maps too.
     for (const team of ['green', 'blue']) {
-      const st = g.flags[team].home;
-      const cx = st.x * s, cz = st.z * s;
+      const st = BASE[team].flag;
+      const cx = (st.x + 0.5) * s, cz = (st.z + 0.5) * s;
       ctx.fillStyle = team === 'blue' ? '#7d9bff' : '#8fd98f';
       ctx.beginPath();
       ctx.moveTo(cx, cz - 4); ctx.lineTo(cx + 4, cz);
@@ -289,7 +298,8 @@ const hud = {
       ctx.fill();
     }
     // Flags: solid dot at home, hollow when dropped, pulsing ring when carried.
-    for (const team of ['green', 'blue']) {
+    // (Deathmatch has no flags — bases and the wedge carry the map.)
+    if (g.flags) for (const team of ['green', 'blue']) {
       const f = g.flags[team];
       const cx = f.pos.x * s, cz = f.pos.z * s;
       const col = team === 'blue' ? '#7d9bff' : '#8fd98f';
@@ -450,6 +460,8 @@ export class Game {
 
     if (this.mode !== 'client') this._spawnBots();
 
+    this.gameMode = 'ctf';             // 'ctf' | 'tdm' — set before rebuild()
+    this.mapLock = null;               // host map pref: fixed index, or null = rotate
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.captures = { green: 0, blue: 0 };
     this.grenades = [];
@@ -471,7 +483,7 @@ export class Game {
     for (const b of this.bots) disposeObject(b.parts.group);
     for (const av of this.avatars.values()) av.dispose();
     this.avatars.clear();
-    for (const t of ['green', 'blue']) this.flags[t].dispose();
+    for (const t of ['green', 'blue']) this.flags?.[t].dispose();
     this.seed = seed;
     this.mapIndex = map;
     this.world = new VoxelWorld(this.scene);
@@ -483,7 +495,9 @@ export class Game {
     // with the previous map while the new one renders on screen.
     this.player.body.world = this.world;
     for (const rp of this.remote.values()) rp.body.world = this.world;
-    this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
+    // Deathmatch plays without flags — kills are the score there.
+    this.flags = this.gameMode === 'tdm' ? null
+      : { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.bots = [];
     if (this.mode !== 'client') this._spawnBots();
     this.captures = { green: 0, blue: 0 };
@@ -705,16 +719,22 @@ export class Game {
   }
 
   onDeath(victim, killer) {
-    // Flag drops where the carrier fell.
-    const enemyFlag = this.flags[this.enemyOf(victim.team)];
-    if (victim.carrier) {
+    // Flag drops where the carrier fell (capture-the-flag only).
+    if (this.flags && victim.carrier) {
       victim.carrier = false;
-      enemyFlag.drop(victim.body.pos.clone());
+      this.flags[this.enemyOf(victim.team)].drop(victim.body.pos.clone());
       hud.feed(`${nameSpan(victim)} dropped the flag`);
       hud.message('FLAG DROPPED', '#ffd97a');
     }
     if (killer && killer !== victim) hud.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
     else hud.feed(`${nameSpan(victim)} blew up`);
+
+    // Deathmatch: a kill is a point. Suicides and the terrain score nothing.
+    if (this.gameMode === 'tdm' && killer && killer !== victim && !this.over) {
+      this.captures[killer.team]++;
+      hud.score(this);
+      if (this.captures[killer.team] >= KILL_LIMIT) this._end(killer.team);
+    }
 
     // Everyone waits out the same redeploy timer — bots too, or a raid on
     // the enemy base would face a fresh wave every few seconds.
@@ -895,7 +915,7 @@ export class Game {
     const won = winner === this.player.team;
     $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
     $('endTitle').style.color = won ? '#8fd98f' : '#e74c3c';
-    const next = MAPS[(this.mapIndex + 1) % MAPS.length].name;
+    const next = MAPS[this.mapLock ?? (this.mapIndex + 1) % MAPS.length].name;
     $('endDetail').textContent =
       `${winner.toUpperCase()} wins ${this.captures.green} — ${this.captures.blue}` +
       ` · next up: ${next}`;
@@ -906,7 +926,9 @@ export class Game {
   }
 
   _rotate() {
-    const map = (this.mapIndex + 1) % MAPS.length;
+    // A host who pinned a map in the lobby keeps it every match; otherwise
+    // the room rotates through all four.
+    const map = this.mapLock ?? (this.mapIndex + 1) % MAPS.length;
     const seed = Math.floor(Math.random() * 1e9);
     if (this.mode === 'host')
       this.net.broadcast({ t: 'e', k: 'restart', map, seed });
@@ -918,7 +940,11 @@ export class Game {
   hostOnData(id, d) {
     // Matchmaking probe: answer on the same channel, before any join logic.
     if (d.t === 'ping') {
-      this.net.sendTo(id, { t: 'pong', humans: this.remote.size + 1, max: MAX_HUMANS });
+      // Room-browser probe: everything the list row wants to show.
+      this.net.sendTo(id, { t: 'pong', humans: this.remote.size + 1, max: MAX_HUMANS,
+        map: this.mapIndex, mode: this.gameMode,
+        g: this.captures.green, b: this.captures.blue,
+        names: [this.player.name, ...[...this.remote.values()].map(p => p.name)].slice(0, 8) });
       return;
     }
     if (d.t === 'hi') {
@@ -927,7 +953,7 @@ export class Game {
       if (row) { // a survivor finding the new room: restore, don't respawn
         const p = this._restoreProxy(id, cleanName(d.name), row);
         this._migRoster.delete(id);
-        this.net.sendTo(id, { t: 'w', id, team: p.team, migrated: 1 });
+        this.net.sendTo(id, { t: 'w', id, team: p.team, migrated: 1, mode: this.gameMode });
         this.feed(`${nameSpan(p)} rejoined ${p.team.toUpperCase()}`);
         return;
       }
@@ -969,8 +995,16 @@ export class Game {
     const proxy = new RemoteProxy(this, id, name, team);
     this.remote.set(id, proxy);
     this._removeBot(team);
-    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog });
+    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog, mode: this.gameMode });
     this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
+  }
+
+  // Where a team's home stand is — the flag stand in CTF, the base plateau
+  // in deathmatch (which has no flags). Bots navigate by this either way.
+  standOf(team) {
+    if (this.flags) return this.flags[team].standPos();
+    const b = BASE[team].flag;
+    return new THREE.Vector3(b.x + 0.5, b.y, b.z + 0.5);
   }
 
   // ---------------- host migration ----------------
@@ -1014,8 +1048,8 @@ export class Game {
     // whoever on the enemy team was flagged as carrier. If the carrier was
     // the departed host, the flag drops where it was.
     for (const team of ['green', 'blue']) {
-      const f = this.flags[team];
-      if (f.state === 'carried') {
+      const f = this.flags?.[team];
+      if (f && f.state === 'carried') {
         const c = this.entities().find(e => e.carrier && e.team === this.enemyOf(team));
         if (c) f.carrier = c;
         else { f.state = 'dropped'; f.carrier = null; f.dropTimer = 30; }
@@ -1050,7 +1084,7 @@ export class Game {
   hostOnLeave(id) {
     const p = this.remote.get(id);
     if (!p) return;
-    if (p.carrier) {
+    if (p.carrier && this.flags) {
       p.carrier = false;
       this.flags[this.enemyOf(p.team)].drop(p.body.pos.clone());
     }
@@ -1083,7 +1117,7 @@ export class Game {
       p: P,
       b: this.bots.map(b => [b.id, b.name, b.team, ...arr(b.body.pos),
         b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0]),
-      f: {
+      f: this.flags && {
         g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
         b: [FLAG_CODE[this.flags.blue.state], ...arr(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
       },
@@ -1100,6 +1134,7 @@ export class Game {
     if (d.t === 'w') {
       this.myId = d.id;
       this.player.team = d.team;
+      if (d.mode) this.gameMode = d.mode; // rebuild below needs it (flagless TDM)
       if (d.migrated) {
         // Baton-pass rejoin: we never left — keep the world, position, and
         // kit we already have; the new host corrects drift via snapshots.
@@ -1156,16 +1191,18 @@ export class Game {
       if (!seen.has(key)) { av.dispose(); this.avatars.delete(key); }
     }
     const stateName = ['home', 'carried', 'dropped'];
-    for (const team of ['green', 'blue']) {
-      const f = d.f[team[0]], flag = this.flags[team];
-      flag.state = stateName[f[0]];
-      flag.pos.set(f[1], f[2], f[3]);
-      flag.dropTimer = f[4];
-    }
+    if (d.f && this.flags)
+      for (const team of ['green', 'blue']) {
+        const f = d.f[team[0]], flag = this.flags[team];
+        flag.state = stateName[f[0]];
+        flag.pos.set(f[1], f[2], f[3]);
+        flag.dropTimer = f[4];
+      }
     this.captures.green = d.c[0];
     this.captures.blue = d.c[1];
     hud.score(this);
-    if (d.o && !this.over) this._end(d.c[0] >= WIN_SCORE ? 'green' : 'blue');
+    const limit = this.gameMode === 'tdm' ? KILL_LIMIT : WIN_SCORE;
+    if (d.o && !this.over) this._end(d.c[0] >= limit ? 'green' : 'blue');
     this._lastGrenades = d.g;
   }
 
@@ -1236,7 +1273,7 @@ export class Game {
         yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool,
         c: p.crouched ? 1 : 0 });
     }
-    for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
+    if (this.flags) for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
     const g0 = this._lastGrenades?.[0];
     this.grenadeMesh.visible = !!g0;
     if (g0) this.grenadeMesh.position.set(g0[0], g0[1], g0[2]);
@@ -1279,7 +1316,7 @@ export class Game {
 
     if (!this.over) {
       this._updateGrenades(dt);
-      this._updateFlags(dt);
+      if (this.flags) this._updateFlags(dt);
     } else if (this._rotateT != null) {
       this._rotateT -= dt;
       if (this._rotateT <= 0) { this._rotateT = null; this._rotate(); }

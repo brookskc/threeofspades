@@ -10,10 +10,11 @@
 
 ## The game
 
-Green vs. Blue capture-the-flag on fully destructible voxel battlefields. Dig
-trenches with your spade, wall off chokepoints with blocks, crater the midfield
-with grenades; even ordinary gunfire chews through cover. Then steal the enemy
-flag and run it home. First team to 3 captures wins.
+Green vs. Blue on fully destructible voxel battlefields. Dig trenches with
+your spade, wall off chokepoints with blocks, crater the midfield with
+grenades; even ordinary gunfire chews through cover. Two modes: capture the
+flag (steal the enemy flag and run it home, first to 3 captures wins) or team
+deathmatch (no flags, pure firefight, first to 20 kills).
 
 Every room runs with AI soldiers who hunt flags, strafe, and will literally dig
 through your walls, so a quiet room still plays a full match while it waits for
@@ -38,6 +39,18 @@ across opposing teams: you fight *each other*, not side by side against bots.
 Every soldier, human or bot, wears its callsign on a floating nametag, tinted
 by team and occluded by terrain just like the body beneath it, so you can tell
 your buddy from your enemy before you pull the trigger.
+
+Prefer to pick the room yourself? The *browse public rooms* link scans every
+public slot at once and lists what answers: map, mode, score, callsigns, and
+open seats, fullest room first. Click a row and you drop straight in.
+
+![Room browser](docs/browser.png)
+
+However you end up hosting (a private room, or a quick match that claims an
+empty slot), the menu's *when you host* picks apply: pin a favorite map or let
+it rotate, and choose capture the flag or team deathmatch. Host migration is
+the exception: a promoted replica keeps the room's running map and mode, since
+changing the rules mid-match would be cheating.
 
 Want a private lobby instead? The small `host` / `join` links under the main
 button give you a 4-letter room code to share with friends.
@@ -152,8 +165,10 @@ Multiplayer (`src/net.js`) wraps PeerJS in a host-authoritative star: clients
 send inputs and actions, the host simulates, and everyone renders snapshots
 with about 130 ms of interpolation (`src/avatar.js`). Maps are
 seed-deterministic, so joiners regenerate the identical world locally and
-replay a compact edit log to catch up on every dug trench and crater. Host
-migration (`src/main.js`) rides on that same edit log: on host silence the
+replay a compact edit log to catch up on every dug trench and crater. The room
+browser is matchmaking's probe with the hood up: hosts answer a ping with a
+roster summary (map, mode, score, names), so listing a room never joins it.
+Host migration (`src/main.js`) rides on that same edit log: on host silence the
 clients elect a successor by peer-id rank, claim the derived room
 `<code>-M<n>`, and rebuild the authoritative sim from the last snapshot. The
 match survives its host.
@@ -174,7 +189,7 @@ imports over `file://`. Any static server avoids this.)
 
 ## Roadmap
 
-- Classic 512² maps, more modes (TC), map seed selector.
+- Classic 512² maps, more modes (TC, king of the hill), map seed selector.
 
 ## License
 

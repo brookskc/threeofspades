@@ -176,7 +176,11 @@ export class Net {
       peer.on('error', onErr);
       const conn = peer.connect(target, { reliable: true });
       conn.on('open', () => conn.send({ t: 'ping' }));
-      conn.on('data', d => { if (d.t === 'pong') done({ kind: 'room', humans: d.humans, max: d.max }); });
+      conn.on('data', d => {
+        if (d.t === 'pong')
+          done({ kind: 'room', humans: d.humans, max: d.max, map: d.map,
+                 mode: d.mode, g: d.g, b: d.b, names: d.names ?? [] });
+      });
       conn.on('close', () => done({ kind: 'dead' }));
       conn.on('error', () => done({ kind: 'dead' }));
     });
@@ -244,6 +248,32 @@ export class Net {
       guest.destroy();
       return { kind: 'down' };
     }
+  }
+
+  // Room browser: probe EVERY public slot over one anon guest peer and report
+  // what's live, fullest first. Unlike quickScan this never joins and never
+  // claims — the guest peer stays open so the caller can knock on the room
+  // the player picks (and must destroy it if nobody picks anything).
+  // Resolves { kind: 'rooms', guest, rooms: [{ slot, humans, max, map, mode,
+  // g, b, names }] } or { kind: 'down' }.
+  static async roomScan(timeoutMs = 9000) {
+    const guest = new Peer();
+    const ready = new Promise((res, rej) => {
+      guest.on('open', res);
+      guest.on('error', rej);
+    });
+    try { await ready; } catch { guest.destroy(); return { kind: 'down' }; }
+    const total = PUBLIC_SLOTS * PUBLIC_PAGES;
+    const results = await Promise.all(
+      Array.from({ length: total }, (_, i) =>
+        Net._probe(guest, slotCode(i), timeoutMs).then(p => ({ slot: i, p }))));
+    const rooms = [];
+    for (const { slot, p } of results) {
+      if (p.kind === 'room') rooms.push({ slot, ...p });
+      else if (p.kind === 'down') { guest.destroy(); return { kind: 'down' }; }
+    }
+    rooms.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
+    return { kind: 'rooms', guest, rooms };
   }
 
   get clientIds() { return [...this.conns.keys()]; }

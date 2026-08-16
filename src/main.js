@@ -302,6 +302,42 @@ function adoptJoin(n, code) {
   };
 }
 
+// --- host preferences: map + mode, remembered across visits ---
+// Applied whenever this player hosts — a private HOST or a quick-match slot
+// claim — never on migration promotion, so a replica keeps the room's
+// running map and mode. gameMode must be set BEFORE rebuild(), since flags
+// only exist in CTF. ?map=2&mode=tdm are test hooks that force the selects.
+const mapPref = $('mapPref'), modePref = $('modePref');
+{
+  const rot = document.createElement('option');
+  rot.value = '-1'; rot.textContent = 'rotate';
+  mapPref.appendChild(rot);
+  MAPS.forEach((m, i) => {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = m.name;
+    mapPref.appendChild(o);
+  });
+  mapPref.value = localStorage.getItem('tos.map') ?? '-1';
+  modePref.value = localStorage.getItem('tos.mode') ?? 'ctf';
+  const save = () => {
+    localStorage.setItem('tos.map', mapPref.value);
+    localStorage.setItem('tos.mode', modePref.value);
+  };
+  mapPref.addEventListener('change', save);
+  modePref.addEventListener('change', save);
+  const pm = parseInt(params.get('map'), 10);
+  if (Number.isInteger(pm) && pm >= 0 && pm < MAPS.length) mapPref.value = String(pm);
+  if (params.get('mode')) modePref.value = params.get('mode');
+}
+
+// Returns the map index to start the new room on.
+function applyHostPrefs() {
+  const v = parseInt(mapPref.value, 10);
+  game.mapLock = (v >= 0 && v < MAPS.length) ? v : null;
+  game.gameMode = modePref.value === 'tdm' ? 'tdm' : 'ctf';
+  return game.mapLock ?? Math.floor(Math.random() * MAPS.length);
+}
+
 $('hostBtn').addEventListener('click', () => {
   if (net || matchmaking) return;
   migrationGen = 0; // a fresh room starts the baton count over
@@ -309,7 +345,7 @@ $('hostBtn').addEventListener('click', () => {
   initAudio();
   game.mode = 'host';
   game.player.name = callsign();
-  game.rebuild(Math.floor(Math.random() * 1e9));
+  game.rebuild(Math.floor(Math.random() * 1e9), applyHostPrefs());
   const tryCode = () => {
     const code = params.get('code')?.toUpperCase() ?? makeCode();
     adoptHost(Net.host(code, {}), code, { onTaken: tryCode });
@@ -390,7 +426,7 @@ $('quickBtn').addEventListener('click', async () => {
     } else if (r.kind === 'host') {
       migrationGen = 0;
       game.mode = 'host';
-      game.rebuild(Math.floor(Math.random() * 1e9));
+      game.rebuild(Math.floor(Math.random() * 1e9), applyHostPrefs());
       adoptHost(r.net, slotCode(r.slot), { public: true, alreadyOpen: true });
       game.hud.message(`HOSTING PUBLIC ROOM ${r.slot + 1} — PLAYERS WILL DROP IN`, '#ffd97a');
     } else {
@@ -405,6 +441,110 @@ $('quickBtn').addEventListener('click', async () => {
     if (document.pointerLockElement === renderer.domElement) setPlaying(true);
   } finally { matchmaking = false; }
 });
+
+// --- room browser: scan every public slot and list what answers ---
+// Unlike quick match this shows the player what's live and lets them pick.
+// The scan's guest peer stays open between scans so a row click can knock
+// immediately; it's destroyed on BACK or consumed by the join.
+const browserEl = $('browser'), browseSt = $('browsestatus'), browseListEl = $('browselist');
+let browseGuest = null, scanning = false;
+
+function roomRow(room) {
+  const row = document.createElement('div');
+  row.className = 'brow';
+  const main = document.createElement('div');
+  main.className = 'bmain';
+  const map = document.createElement('div');
+  map.className = 'bmap';
+  map.textContent = MAPS[room.map]?.name ?? 'UNKNOWN MAP';
+  const meta = document.createElement('div');
+  meta.className = 'bmeta';
+  const unit = room.mode === 'tdm' ? 'kills' : 'captures';
+  meta.textContent = `${room.mode === 'tdm' ? 'team deathmatch' : 'capture the flag'} · ${room.g} — ${room.b} ${unit}`;
+  const names = document.createElement('div');
+  names.className = 'bnames';
+  names.textContent = room.names.join(' · ');
+  main.append(map, meta, names);
+  const seats = document.createElement('div');
+  seats.className = 'bseats';
+  seats.textContent = `${room.humans}/${room.max}`;
+  const join = document.createElement('div');
+  join.className = 'bjoin';
+  join.textContent = 'JOIN →';
+  row.append(main, seats, join);
+  row.addEventListener('click', () => joinFromBrowser(room));
+  return row;
+}
+
+async function scanRooms() {
+  if (scanning) return;
+  scanning = true;
+  browseGuest?.destroy(); browseGuest = null;
+  browseListEl.innerHTML = '';
+  browseSt.textContent = 'scanning public rooms…';
+  try {
+    const r = await Net.roomScan(qmTimeout);
+    if (r.kind === 'down') {
+      browseSt.textContent = 'cannot reach the matchmaking service — check your connection';
+      return;
+    }
+    browseGuest = r.guest; // kept warm for the join knock
+    if (!r.rooms.length) {
+      browseSt.innerHTML = 'no public rooms right now — hit <b>QUICK MATCH</b> and one starts with you as host';
+      return;
+    }
+    browseSt.textContent = `${r.rooms.length} room${r.rooms.length === 1 ? '' : 's'} online — click one to join`;
+    for (const room of r.rooms) browseListEl.appendChild(roomRow(room));
+  } finally { scanning = false; }
+}
+
+async function joinFromBrowser(room) {
+  if (net || scanning) return;
+  const guest = browseGuest; browseGuest = null;
+  if (!guest) { scanRooms(); return; } // stale rows: rescan, pick again
+  initAudio();
+  game.player.name = callsign();
+  const lock = renderer.domElement.requestPointerLock(); // gesture-valid only now
+  lock?.catch?.(() => {});
+  browseSt.textContent = `joining ${MAPS[room.map]?.name ?? 'room'}…`;
+  const k = await Net._knock(guest, slotCode(room.slot), game.player.name, qmTimeout);
+  if (k.kind === 'join') {
+    migrationGen = 0;
+    game.mode = 'client';
+    browserEl.classList.add('hidden');
+    $('menu').classList.remove('hidden');
+    adoptJoin(Net.adoptGuest(guest, k.conn), slotCode(room.slot));
+    const plain = game.onWelcome;
+    game.onWelcome = () => {
+      plain();
+      status(`joined <b>PUBLIC ROOM ${room.slot + 1}</b> — you are <b>${game.player.team.toUpperCase()}</b>`);
+      game.hud.message(`JOINED PUBLIC ROOM ${room.slot + 1} — YOU ARE ${game.player.team.toUpperCase()}`, '#ffd97a');
+    };
+    game.clientOnData(k.welcome); // replay the welcome through the normal path
+    if (document.pointerLockElement === renderer.domElement) setPlaying(true);
+  } else {
+    guest.destroy();
+    browseSt.textContent = k.kind === 'full' ? 'that room just filled up'
+      : k.kind === 'down' ? 'cannot reach the matchmaking service — check your connection'
+      : 'that room just ended';
+    if (k.kind !== 'down') scanRooms(); // show what is actually live now
+  }
+}
+
+$('browseBtn').addEventListener('click', () => {
+  if (net || matchmaking || scanning) return;
+  if (!requireName()) return;
+  initAudio();
+  $('menu').classList.add('hidden');
+  browserEl.classList.remove('hidden');
+  scanRooms();
+});
+$('browseBack').addEventListener('click', () => {
+  browserEl.classList.add('hidden');
+  $('menu').classList.remove('hidden');
+  browseGuest?.destroy(); browseGuest = null;
+});
+$('browseRefresh').addEventListener('click', () => scanRooms());
 
 $('codeInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('joinBtn').click();
@@ -454,7 +594,8 @@ addEventListener('resize', () => {
 });
 
 // Headless/test hooks: ?mp=host&code=TEST&auto=1 · ?mp=join&code=TEST&auto=1
-// ?mp=quick&auto=1&ns=<namespace> · host cap override: &cap=2
+// ?mp=quick&auto=1&ns=<namespace> · ?mp=browse&auto=1 · host cap: &cap=2
+// Pref hooks: &map=0..3&mode=ctf|tdm · TDM kill limit: &killcap=2
 // Auto runs can't type, so they get a callsign to satisfy the lobby gate.
 if (params.get('auto') && !rawName())
   $('nameInput').value = 'TEST' + Math.floor(Math.random() * 90 + 10);
@@ -466,6 +607,8 @@ if (params.get('mp') === 'host') {
   setTimeout(() => $('joinBtn').click(), 800);
 } else if (params.get('mp') === 'quick') {
   setTimeout(() => $('quickBtn').click(), 400);
+} else if (params.get('mp') === 'browse') {
+  setTimeout(() => $('browseBtn').click(), 400);
 }
 
 // ---------------- loop ----------------
@@ -510,7 +653,7 @@ function frame() {
     );
     camera.lookAt(SX / 2, 24, SZ / 2);
     game.world.animateSky(game.time += dt);
-    for (const f of ['green', 'blue']) game.flags[f].clientUpdate(game.time);
+    if (game.flags) for (const f of ['green', 'blue']) game.flags[f].clientUpdate(game.time);
     game.effects.update(dt);
   }
   renderer.render(scene, camera);

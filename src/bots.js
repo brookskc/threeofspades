@@ -55,8 +55,9 @@ export class Bot {
   goal() {
     const g = this.game;
     this.responding = false;
-    if (this.carrier) return g.flags[this.team].standPos();          // run it home
-    const own = g.flags[this.team];
+    if (this.carrier) return g.standOf(this.team);                   // run it home
+    const own = g.flags?.[this.team];
+    if (!own) return g.standOf(g.enemyOf(this.team));                // deathmatch: hunt
     // Flag defense: the two closest free bots drop everything — sprint at the
     // thief while it's carried, converge on the flag while it's on the ground.
     if (own.state === 'carried' && own.carrier) {
@@ -69,7 +70,7 @@ export class Bot {
     }
     const enemyFlag = g.flags[g.enemyOf(this.team)];
     if (enemyFlag.state === 'dropped') return enemyFlag.pos;         // grab the loose flag
-    return enemyFlag.standPos();                                     // storm their base
+    return g.standOf(g.enemyOf(this.team));                          // storm their base
   }
 
   // Am I one of the two closest living, non-carrying teammates to the spot?
