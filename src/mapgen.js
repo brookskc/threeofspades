@@ -28,7 +28,7 @@ function mulberry32(a) {
 
 // modes: which game modes the map supports. DUNES retired from the CTF
 // rotation (its long sniper lanes punish flag runs) but kept for deathmatch
-// and king of the hill, where the midfield mesa is a natural point.
+// and king of the hill, mirrored about midfield so the hill fight is fair.
 // hill: king-of-the-hill zone — center column and radius in blocks.
 export const MAPS = [
   { key: 'island',  name: 'GREENBELT', modes: ['ctf', 'tdm'],        gen: null },
@@ -300,16 +300,25 @@ function genForest(world, seed) {
 function genDesert(world, seed) {
   const noise = makeNoise(seed);
   const height = new Float32Array(SX * SZ);
-  const mesas = [];
+  const CX = SX / 2, CZ = SZ / 2; // the hill sits at dead center
+  // Everything west of the midfield axis is mirrored east (x -> SX-1-x), so
+  // both teams walk identical approaches, perches, and cover. The bases sit
+  // at matching z, which makes the mirror line the fair line.
   const rnd0 = mulberry32(seed ^ 0xde5e37);
-  for (let i = 0; i < 5; i++)
-    mesas.push([50 + rnd0() * (SX - 100), 40 + rnd0() * (SZ - 80)]);
+  const mesas = [];
+  while (mesas.length < 4) {
+    const mx = 44 + rnd0() * 62, mz = 40 + rnd0() * (SZ - 80); // west half only
+    if (Math.hypot(mx - CX, mz - CZ) < 34) continue;      // no perch on the point
+    if (Math.hypot(mx - BASE.green.x, mz - BASE.green.z) < 40) continue;
+    mesas.push([mx, mz], [SX - 1 - mx, mz]);              // every mesa has a twin
+  }
 
   for (let z = 0; z < SZ; z++)
     for (let x = 0; x < SX; x++) {
+      const fx = Math.min(x, SX - 1 - x); // folded west: the east is a mirror
       // Ridged dune field marching diagonally across the map.
-      const dune = Math.abs(Math.sin((x + z) * 0.045 + noise(x * 0.01, z * 0.01) * 3));
-      let h = SEA + 6 + dune * 7 + noise(x * 0.03, z * 0.03) * 2.5;
+      const dune = Math.abs(Math.sin((fx + z) * 0.045 + noise(fx * 0.01, z * 0.01) * 3));
+      let h = SEA + 6 + dune * 7 + noise(fx * 0.03, z * 0.03) * 2.5;
       for (const [mx, mz] of mesas) {
         const d = Math.hypot(x - mx, z - mz);
         if (d < 12) { // flat top, sheer sides
@@ -320,8 +329,24 @@ function genDesert(world, seed) {
       height[at(x, z)] = Math.min(SY - 8, Math.max(SEA + 3, h)); // no sea here
     }
 
+  // The hill pad: a flat, stone-capped disc at dead center, so the point
+  // fights the same from every approach. Blends back into the dunes outside.
+  // Centered on the 127.5 mirror axis exactly, or the blend ring would break
+  // the symmetry it flattens.
+  const PAD = SEA + 9, AX = (SX - 1) / 2;
+  for (let z = 0; z < SZ; z++)
+    for (let x = 0; x < SX; x++) {
+      const d = Math.hypot(x - AX, z - CZ);
+      if (d < 20) {
+        const t = ss((d - 9) / 11);
+        const i = at(x, z);
+        height[i] = height[i] * t + PAD * (1 - t);
+      }
+    }
+
   flattenBases(height);
-  fillColumns(world, height, () => BLOCK.SAND, BLOCK.SAND);
+  fillColumns(world, height,
+    (x, z) => Math.hypot(x - AX, z - CZ) < 9 ? BLOCK.STONE : BLOCK.SAND, BLOCK.SAND);
 
   // Mesas cap in stone — the perch reads as rock and tunnels stay sandy.
   for (const [mx, mz] of mesas)
@@ -333,29 +358,37 @@ function genDesert(world, seed) {
         world.data[(y * SZ + z) * SX + x] = BLOCK.STONE;
       }
 
-  // Midfield ruins: two broken sandstone rectangles, waist-to-head high.
+  // Midfield ruins: one broken sandstone rectangle north of the point, placed
+  // twice — itself and its mirror twin. Same walls, same gaps, same fight.
   const rnd = mulberry32(seed ^ 0x2015);
-  for (const [rx, rz] of [[SX / 2 - 14, SZ / 2 - 10], [SX / 2 + 8, SZ / 2 + 8]]) {
+  {
+    const rx = SX / 2 - 14, rz = SZ / 2 - 10, cols = [];
     for (let per = 0; per < 22; per++) {
       const side = per % 4, step = Math.floor(per / 4);
       const x = rx + (side === 0 ? step * 2 : side === 1 ? 8 : side === 2 ? step * 2 : 0);
       const z = rz + (side === 0 ? 0 : side === 1 ? step * 2 : side === 2 ? 8 : step * 2);
-      if (rnd() < 0.3) continue; // collapsed gaps
-      const y = Math.floor(height[at(x, z)]);
-      const wallH = 2 + Math.floor(rnd() * 3);
-      for (let wy = 1; wy <= wallH; wy++)
-        world.data[((y + wy) * SZ + z) * SX + x] = BLOCK.STONE;
+      cols.push([x, z, rnd() < 0.3, 2 + Math.floor(rnd() * 3)]);
+    }
+    for (const [x, z, gone, wallH] of cols) {
+      if (gone) continue; // collapsed gaps
+      for (const px of [x, SX - 1 - x]) {
+        const y = Math.floor(height[at(px, z)]);
+        for (let wy = 1; wy <= wallH; wy++)
+          world.data[((y + wy) * SZ + z) * SX + px] = BLOCK.STONE;
+      }
     }
   }
-  // Cacti.
-  for (let i = 0; i < 42; i++) {
-    const x = 6 + Math.floor(rnd() * (SX - 12)), z = 6 + Math.floor(rnd() * (SZ - 12));
+  // Cacti, mirrored like everything else.
+  for (let i = 0; i < 21; i++) {
+    const x = 6 + Math.floor(rnd() * (CX - 12)), z = 6 + Math.floor(rnd() * (SZ - 12));
+    if (Math.hypot(x - CX, z - CZ) < 14) continue; // the arena stays clear
     if (Math.hypot(x - BASE.green.x, z - BASE.green.z) < 24) continue;
-    if (Math.hypot(x - BASE.blue.x, z - BASE.blue.z) < 24) continue;
-    const y = Math.floor(height[at(x, z)]);
     const cactusH = 2 + Math.floor(rnd() * 2);
-    for (let cy = 1; cy <= cactusH; cy++)
-      world.data[((y + cy) * SZ + z) * SX + x] = BLOCK.GREEN;
+    for (const px of [x, SX - 1 - x]) {
+      const y = Math.floor(height[at(px, z)]);
+      for (let cy = 1; cy <= cactusH; cy++)
+        world.data[((y + cy) * SZ + z) * SX + px] = BLOCK.GREEN;
+    }
   }
 
   buildBase(world, height, 'green');

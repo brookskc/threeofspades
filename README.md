@@ -113,7 +113,7 @@ the next map in that pool with a fresh seed:
 | **GREENBELT** | CTF · TDM | The classic rolling green island. Open hills and midfield ridgelines; pure arena CTF. |
 | **BEACHHEAD** | CTF · TDM | D-Day. Green team storms out of landing craft onto sand thick with tank traps, past their own beach-head pillbox and a trench cut into the bluff; Blue holds the heights in concrete MG pillboxes with firing slits. |
 | **PINEFALL** | CTF · TDM | Dense pine forest cut by a wide, winding creek. Short sightlines and flanking routes, ambush country. |
-| **DUNES** | TDM · KOTH | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. Retired from the CTF pool (those lanes punished flag runs), it still hosts deathmatch and king of the hill. |
+| **DUNES** | TDM · KOTH | Desert mesas and ridged dunes. Long sniper lanes between sheer rock towers, ruins at midfield. Retired from the CTF pool (those lanes punished flag runs), it still hosts deathmatch and king of the hill. The whole map is mirrored about midfield and the hill sits on a flat stone pad at dead center, so the point fights fair from either side. |
 | **CROWN** | KOTH · TDM | A flat-topped plateau ringed by a moat and crossed by four causeways. The hill sits inside a broken ring fort at the top, stub towers on the corners. |
 | **CALDERA** | KOTH · TDM | A scorched volcanic crater breached by saddle gaps east and west. Basalt pillars stud the bowl; the hill crowns a knoll at the center. |
 
