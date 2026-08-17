@@ -14,8 +14,8 @@ Green vs. Blue on fully destructible voxel battlefields. Dig trenches with
 your spade, wall off chokepoints with blocks, crater the midfield with
 grenades; even ordinary gunfire chews through cover. Three modes: capture the
 flag (steal the enemy flag and run it home, first to 3 captures wins), team
-deathmatch (no flags, pure firefight, first to 20 kills), and king of the hill
-(one neutral point at midfield; stand on it alone for 4 seconds to claim it,
+deathmatch (no flags, pure firefight, first to 30 kills), and king of the hill
+(one neutral point at midfield; stand on it alone for 6 seconds to claim it,
 then it banks a second of hold time for every second it stays yours, even
 while the enemy fights to take it back; first team to 2:00 of hold time wins).
 

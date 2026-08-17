@@ -13,13 +13,13 @@ import { Avatar } from './avatar.js';
 const WIN_SCORE = 3;
 // Team deathmatch: no flags, kills are points. ?killcap= lowers the bar for tests.
 const killcapParam = parseInt(new URLSearchParams(location.search).get('killcap'), 10);
-const KILL_LIMIT = Number.isInteger(killcapParam) ? Math.max(2, killcapParam) : 20;
+const KILL_LIMIT = Number.isInteger(killcapParam) ? Math.max(2, killcapParam) : 30;
 // King of the hill: own the point to accrue hold time; first to HOLD_LIMIT
 // seconds wins. Flipping a held point takes CAP_TIME uncontested seconds on
 // it. ?kothtime= shrinks the clock for tests.
 const kothtimeParam = parseInt(new URLSearchParams(location.search).get('kothtime'), 10);
 const HOLD_LIMIT = Number.isInteger(kothtimeParam) ? Math.max(10, kothtimeParam) : 120;
-const CAP_TIME = 4;
+const CAP_TIME = 6;
 const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
 // A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
 // blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
