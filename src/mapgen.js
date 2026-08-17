@@ -262,8 +262,12 @@ function genForest(world, seed) {
         + rim * 18 * (0.6 * noise(x * 0.016, z * 0.016)
                     + 0.4 * noise(x * 0.05,  z * 0.05));
       // A winding creek carved just below the waterline — wide enough to
-      // matter as a midfield obstacle (and to fight along).
-      const creekZ = SZ / 2 + 58 * Math.sin(x * 0.017 + seed % 7);
+      // matter as a midfield obstacle (and to fight along). The meander is
+      // pinned to ford midfield: the old phase (seed % 7 in absolute x)
+      // could push every zero crossing outside the creek's x-range, so the
+      // base-to-base path never got wet. Now it always fords near x=128.
+      const ford = SX / 2 + ((seed % 5) - 2) * 6; // 116..140, varies by seed
+      const creekZ = SZ / 2 + 58 * Math.sin((x - ford) * 0.022);
       const cd = Math.abs(z - creekZ);
       if (cd < 5.5 && x > 60 && x < SX - 60) h = Math.min(h, SEA - 1);
       height[at(x, z)] = Math.min(SY - 8, h);
