@@ -898,12 +898,13 @@ export class Game {
     }
     // Blast damage: measured to center mass, not the eye — a grenade on the
     // ground used to lose ~1.6 blocks of reach to eye height alone. Radius 9
-    // matches what the fireball looks like it should do.
+    // matches what the fireball looks like it should do, and 150 base means
+    // point blank (~3 blocks) kills outright.
     const R_DMG = 9;
     for (const e of this.entities()) {
       if (!e.alive) continue;
       const d = g.pos.distanceTo(e.body.pos.clone().add(new THREE.Vector3(0, 0.9, 0)));
-      if (d < R_DMG) this.damage(e, Math.max(15, 130 * (1 - d / R_DMG)), g.owner);
+      if (d < R_DMG) this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner);
     }
   }
 
