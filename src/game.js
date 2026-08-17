@@ -896,10 +896,14 @@ export class Game {
       this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, R]);
       this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: R });
     }
+    // Blast damage: measured to center mass, not the eye — a grenade on the
+    // ground used to lose ~1.6 blocks of reach to eye height alone. Radius 9
+    // matches what the fireball looks like it should do.
+    const R_DMG = 9;
     for (const e of this.entities()) {
       if (!e.alive) continue;
-      const d = g.pos.distanceTo(e.body.eye());
-      if (d < 7) this.damage(e, Math.max(15, 130 * (1 - d / 7)), g.owner);
+      const d = g.pos.distanceTo(e.body.pos.clone().add(new THREE.Vector3(0, 0.9, 0)));
+      if (d < R_DMG) this.damage(e, Math.max(15, 130 * (1 - d / R_DMG)), g.owner);
     }
   }
 

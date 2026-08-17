@@ -19,6 +19,7 @@ export class Player {
   constructor(game, camera, dom) {
     this.game = game;
     this.camera = camera;
+    this.dom = dom;
     this.team = 'green';
     const b = game.spawnPoint('green');
     this.body = new Body(game.world, b.x, b.y, b.z);
@@ -60,8 +61,17 @@ export class Player {
       if (e.code === 'Space') this.body.jump();
     });
     addEventListener('keyup', e => (this.keys[e.code] = false));
-    dom.addEventListener('mousedown', e => { this.mouseDown[e.button] = true; });
+    // A click only counts if the pointer was already locked when it landed.
+    // The click that re-locks the pointer must never fire the tool: it used
+    // to throw a grenade nobody aimed (lock engaged a moment later, the held
+    // flag was still set, and the "first" grenade went off on its own).
+    dom.addEventListener('mousedown', e => {
+      if (document.pointerLockElement === dom) this.mouseDown[e.button] = true;
+    });
     addEventListener('mouseup', e => { this.mouseDown[e.button] = false; });
+    document.addEventListener('pointerlockchange', () => {
+      this.mouseDown = [false, false, false];
+    });
     addEventListener('mousemove', e => {
       if (document.pointerLockElement !== dom) return;
       this.yaw -= e.movementX * 0.0022;
@@ -219,7 +229,11 @@ export class Player {
         this.ammo[this.tool] = TOOLS[this.tool].mag;
         this.game.hud.refreshTool(this);
       }
-    } else if (this.mouseDown[0] && this.cooldown <= 0) {
+    // The lock gate: a click that lands while the pointer is unlocked (the
+    // click that re-locks it) must never fire the tool — it used to throw a
+    // grenade nobody aimed.
+    } else if (this.mouseDown[0] && this.cooldown <= 0
+               && document.pointerLockElement === this.dom) {
       const t = TOOLS[this.tool];
       if (!t.auto) this.mouseDown[0] = false;
       this.cooldown = t.interval;
