@@ -1,6 +1,7 @@
 // bots.js — AI soldiers: they hunt the flag, fight back, and dig through walls.
 import * as THREE from 'three';
 import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch } from './entities.js';
+import { SEA } from './world.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
@@ -38,6 +39,8 @@ export class Bot {
     this.lastPos = this.body.pos.clone();
     this.wander = new THREE.Vector3();
     this.wanderT = 0;
+    this.exit = null;          // committed dry-land column while swimming
+    this.wetT = 0;             // grace timer: recently-in-water → keep seeking dry
     this.digT = 0;             // tunneling swing cooldown
     this.lastDig = -9;         // last shovel swing, game time
     this.blocks = 16;          // combat engineering inventory (cover + bridges)
@@ -107,14 +110,59 @@ export class Bot {
       this.wanderT = 1.5 + Math.random() * 2;
       this.wander.set((Math.random() - .5) * 8, 0, (Math.random() - .5) * 8);
     }
-    const dest = this.responding ? goal : goal.clone().add(this.wander); // responders beeline
+    // Responders beeline; swimmers mostly beeline too — a full-strength
+    // wander vector in the water just yanks a climbing bot off its staircase
+    // and back into the channel (the old creek-bobbing loop).
+    const dest = this.responding ? goal.clone() : goal.clone().add(
+      b.inWater ? this.wander.clone().multiplyScalar(0.25) : this.wander);
+
+    // Dry-land seeking: swimming or wading the shelf, steer for the nearest
+    // dry column — cheap exit first, goal-ward as the tiebreak. A creek that
+    // runs roughly parallel to the goal direction otherwise becomes an
+    // 80-block swim along the channel (the Pinefall bob). Dry means solid at
+    // SEA+1: probing surface() would read tree canopies over the channel as
+    // dry land and march the bot straight back in.
+    // Engage on recency, not altitude: a tunneler working LOW dry ground
+    // (below SEA+1) must not have its dest hijacked toward a "dry column" —
+    // only bots that have actually been swimming get the exit scan. The 2s
+    // grace carries the commitment through the wading half-steps where the
+    // bot bounces in and out of the inWater flag on the shelf.
+    this.wetT = b.inWater ? 2 : Math.max(0, this.wetT - dt);
+    if (this.wetT > 0) {
+      // Commit to the chosen exit column until standing on dry land:
+      // re-picking every frame just hops the dest a few blocks goal-ward
+      // along the bank, and the bot outswims its own shovel without ever
+      // clearing a ledge (the Pinefall bob).
+      let exit = this.exit;
+      // Validity degrades gracefully: the dig-climb clears the exit column's
+      // SEA+1 ledge block as its FIRST swing, so re-testing only SEA+1 would
+      // invalidate the commitment mid-climb and restart the scan every swing.
+      // Solid at SEA still means "one hop from dry" — keep climbing.
+      if (!exit || (!g.world.solid(exit[0], SEA, exit[1]) && !g.world.solid(exit[0], SEA + 1, exit[1]))) {
+        let best = null, bestCost = Infinity;
+        for (const ring of [5, 9, 13]) {
+          for (let a = 0; a < 12; a++) {
+            const ang = a / 12 * Math.PI * 2;
+            const px = Math.floor(b.pos.x + Math.cos(ang) * ring);
+            const pz = Math.floor(b.pos.z + Math.sin(ang) * ring);
+            if (!g.world.solid(px, SEA + 1, pz)) continue; // still the channel
+            const cost = ring + Math.hypot(px + 0.5 - goal.x, pz + 0.5 - goal.z) * 0.1;
+            if (cost < bestCost) { bestCost = cost; best = [px, pz]; }
+          }
+          if (best) break; // a dry column on the nearest ring wins
+        }
+        exit = this.exit = best;
+      }
+      if (exit) dest.set(exit[0] + 0.5, g.world.surface(exit[0], exit[1]), exit[1] + 0.5);
+    } else this.exit = null;
     const dir = new THREE.Vector3(dest.x - b.pos.x, 0, dest.z - b.pos.z);
     const dist = dir.length();
     if (dist > 1.2) dir.normalize();
 
-    // Combat strafe when engaged up close.
+    // Combat strafe when engaged up close — but not in water, where the
+    // sideways mix orbits the bot off its committed exit wall.
     let toFoe = null;
-    if (this.target && this.aimT > 0.3) {
+    if (this.target && this.aimT > 0.3 && !b.inWater) {
       toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
       const side = new THREE.Vector3(-toFoe.z, 0, toFoe.x).multiplyScalar(Math.sin(g.time * 1.7 + this.name.length) > 0 ? 1 : -1);
       dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
@@ -153,10 +201,22 @@ export class Bot {
       if (lo || hi) { tx = px; tz = pz; break; }
       lo = hi = false;
     }
-    if (!this.target && dist > 2 && this.digT <= 0 && hi && (b.onGround || b.inWater)) {
+    // Combat suppresses digging on land (fight first), but a swimmer pressed
+    // against a bank climbs even mid-fight: bobbing in the creek is a worse
+    // look than pausing fire to shovel.
+    // Swimmers dig regardless of distance-to-dest: the committed exit column
+    // IS a wall, so the bot idles within dist<=2 of it forever otherwise.
+    // Gate on lo || hi: under a tree canopy the only obstruction can be a
+    // foot-level leaf block while fy+1 is open air between the leaves.
+    // A bot wedged against terrain digs even mid-fight (stuck >= 1): trading
+    // fire while pressed into a bank it could shovel through is the worse
+    // look — combat only pauses digging on open ground.
+    if ((!this.target || b.inWater || this.stuck >= 1)
+        && (dist > 2 || b.inWater || this.exit)
+        && this.digT <= 0 && (lo || hi) && (b.onGround || b.inWater)) {
       this.digT = 0.32;
       this.lastDig = g.time;
-      const uphill = goal.y - b.pos.y > 1.5;
+      const uphill = dest.y - b.pos.y > 1.5;
       if (lo && uphill) {
         this._digV(tx, fy + 1, tz); this._digV(tx, fy + 2, tz);  // the ledge
         this._digV(tx, fy + 3, tz);                              // its headroom
@@ -193,7 +253,10 @@ export class Bot {
     }
     const bridging = g.time - this.lastBridge < 0.9;
 
-    const speed = b.inWater ? 2.6
+    // Digging pace applies in water too: at full swim speed a bot outswims
+    // its own shovel cadence (~1 block per swing) and never sits at a bank
+    // face long enough to clear the ledge — the creek-bobbing loop.
+    const speed = b.inWater ? (digging ? 1.4 : 3.2)
       : this.target ? 3.4
       : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
       : this.responding ? 5.8      // urgency: our flag is on the ground
@@ -209,8 +272,14 @@ export class Bot {
     this.sampleT -= dt;
     if (this.sampleT <= 0) {
       this.sampleT = 0.4;
-      const moved = b.pos.distanceTo(this.lastPos);
-      this.stuck = moved < 0.5 && dist > 2 ? this.stuck + 1 : 0;
+      // Horizontal displacement only: a bot bouncing in place under a low
+      // canopy moves a full block vertically per hop and would otherwise
+      // read as "making progress", never triggering the sidestep.
+      const moved = Math.hypot(b.pos.x - this.lastPos.x, b.pos.z - this.lastPos.z);
+      // dist>2 alone would never flag a bot pressed against its committed
+      // exit wall (the wall IS the dest), so a wedged climb counts too —
+      // but not mid-swing: a dig-climb is horizontal-stationary by nature.
+      this.stuck = moved < 0.5 && (dist > 2 || this.exit) && !digging ? this.stuck + 1 : 0;
       this.lastPos.copy(b.pos);
     }
     if (this.stuck >= 1 && !(digging && hi)) b.jump();
@@ -218,6 +287,7 @@ export class Bot {
       this.wander.set((Math.random() - .5) * 30, 0, (Math.random() - .5) * 30);
       this.wanderT = 2;
       this.stuck = 0;
+      this.exit = null;      // abandon the exit pick that led us here
     }
 
     b.move(dt);
