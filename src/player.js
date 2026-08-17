@@ -3,11 +3,15 @@ import * as THREE from 'three';
 import { Body } from './entities.js';
 import { sfx } from './audio.js';
 
+// kick: degrees of aim climb per shot (recoil). aimSpread: hip-fire spread
+// multiplier while sighted. The SMG's small kick compounds at 10 rounds/s —
+// spray without pulling down walks over heads past ~25 blocks; the rifle's
+// big kick fully recovers between its slow shots, so tap-fire stays laser.
 export const TOOLS = [
   { key: 'rifle', name: 'RIFLE', damage: 55, headMult: 2, interval: 0.55, spread: 0.0012,
-    mag: 10, reload: 2.2, auto: false, zoom: 2.0 },
+    mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5 },
   { key: 'smg', name: 'SMG', damage: 22, headMult: 1.6, interval: 0.1, spread: 0.02,
-    mag: 30, reload: 1.8, auto: true, zoom: 1.35 },
+    mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7 },
   { key: 'spade', name: 'SPADE', interval: 0.3 },
   { key: 'block', name: 'BLOCK', interval: 0.18 },
   { key: 'nade', name: 'GRENADE', interval: 0.8 },
@@ -38,6 +42,10 @@ export class Player {
     this.reloading = 0;
     this.bob = 0;
     this.recoil = 0;
+    this.climb = 0;      // accumulated recoil climb — part of the AIM, not cosmetic
+    this._sinceShot = 99; // recovery starts 0.12s after the last shot
+    this.aiming = false;  // RMB held with a gun out
+    this.aimK = 0;        // 0..1 iron-sights blend (viewmodel + crosshair)
     this.swing = 0; // spade chop animation
     this.crouched = false; // hold CTRL: slower, steadier aim, ledge grip
     this.carrier = false; // carrying the enemy flag?
@@ -80,8 +88,11 @@ export class Player {
     });
     addEventListener('mousemove', e => {
       if (document.pointerLockElement !== dom) return;
-      this.yaw -= e.movementX * 0.0022;
-      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0022));
+      // Sensitivity follows the zoom: sighted in, the same mouse travel
+      // covers less view, so fine aim stays reachable.
+      const sens = 0.0022 * (this.camera.fov / BASE_FOV);
+      this.yaw -= e.movementX * sens;
+      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * sens));
     });
     addEventListener('contextmenu', e => e.preventDefault());
   }
@@ -113,10 +124,11 @@ export class Player {
   }
 
   lookDir() {
+    const pitch = this.pitch + this.climb; // recoil climb steers real shots
     return new THREE.Vector3(
-      Math.cos(this.pitch) * Math.cos(this.yaw),
-      Math.sin(this.pitch),
-      -Math.cos(this.pitch) * Math.sin(this.yaw)
+      Math.cos(pitch) * Math.cos(this.yaw),
+      Math.sin(pitch),
+      -Math.cos(pitch) * Math.sin(this.yaw)
     );
   }
 
@@ -187,7 +199,10 @@ export class Player {
     // Crouch-walking grips the rim: no falling into ravines or off parapets.
     b.guard = this.crouched;
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
-    const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1);
+    // Iron sights: RMB with a gun trades mobility for accuracy.
+    this.aiming = !!(this.mouseDown[2] && this.tool < 2);
+    const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1)
+      * (this.aiming ? 0.6 : 1);
     // Auto-step climbs one-block rises — but not at a sprint: charging
     // full-tilt up terraces would make high ground too cheap.
     b.step = sprint === 1;
@@ -208,19 +223,30 @@ export class Player {
     const moving = wish.lengthSq() > 1 && b.onGround;
     this.bob = moving ? this.bob + dt * 10 : 0;
     this.recoil = Math.max(0, this.recoil - dt * 6);
+    // Recoil climb recovers only once you've stopped firing for a beat:
+    // sustained spray accumulates it, disciplined bursts never feel it.
+    this._sinceShot += dt;
+    if (this._sinceShot > 0.12) this.climb = Math.max(0, this.climb - dt * 0.105);
     const eye = b.eye();
     this.camera.position.set(eye.x, eye.y + Math.sin(this.bob) * 0.045 * (moving ? 1 : 0), eye.z);
-    this.camera.rotation.set(this.pitch + this.recoil * 0.05, this.yaw - Math.PI / 2, 0, 'YXZ');
+    this.camera.rotation.set(this.pitch + this.climb + this.recoil * 0.05, this.yaw - Math.PI / 2, 0, 'YXZ');
     // three.js cameras look down -Z; the -PI/2 offset aligns it with our yaw convention.
 
     // Viewmodel sway + reload dip + spade chop (raise, then strike forward).
+    // Sighted in, the gun slides to center-screen and the crosshair fades —
+    // you're looking down the sights instead.
+    this.aimK += ((this.aiming ? 1 : 0) - this.aimK) * Math.min(1, dt * 10);
     this.swing = Math.max(0, this.swing - dt * 3.3);
     const chop = this.tool === 2 ? Math.sin(this.swing * Math.PI) : 0;
-    this.vmRoot.position.y = -0.26 + Math.sin(this.bob * 2) * 0.008 - this.recoil * 0.04
+    this.vmRoot.position.x = 0.28 * (1 - this.aimK);
+    this.vmRoot.position.y = -0.26 + this.aimK * 0.17
+      + Math.sin(this.bob * 2) * 0.008 * (1 - this.aimK) - this.recoil * 0.04
       + chop * 0.06
       - (this.reloading > 0 ? 0.18 * Math.sin(Math.PI * (1 - this.reloading / TOOLS[this.tool].reload)) : 0);
-    this.vmRoot.position.z = -0.25 - chop * 0.22;
+    this.vmRoot.position.z = -0.25 - chop * 0.22 + this.aimK * 0.1;
     this.vmRoot.rotation.x = -this.recoil * 0.35 - chop * 0.5;
+    const xh = document.getElementById('crosshair');
+    if (xh) xh.style.opacity = 1 - this.aimK * 0.9;
 
     // Aim zoom.
     const aiming = this.mouseDown[2] && this.tool < 2;
@@ -264,6 +290,8 @@ export class Player {
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
     this.recoil = Math.min(1, this.recoil + (t.key === 'rifle' ? 0.9 : 0.35));
+    this.climb = Math.min(0.14, this.climb + (t.kick ?? 0)); // aim climbs per shot
+    this._sinceShot = 0;
     sfx[t.key]();
     this.game.requestShoot(this, t);
     this.game.hud.refreshTool(this);
@@ -296,6 +324,8 @@ export class Player {
     this.body.vel.set(0, 0, 0);
     this.yaw = this.team === 'green' ? 0 : Math.PI; // face the enemy
     this.pitch = 0;
+    this.climb = 0;
+    this.aiming = false; this.aimK = 0;
     this.health = 100;
     this.alive = true;
     this.ammo = TOOLS.map(t => t.mag ?? 0);

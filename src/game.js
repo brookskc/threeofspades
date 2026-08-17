@@ -453,6 +453,9 @@ class Chat {
 // Hold seconds -> "1:32" for the koth score line.
 const holdClock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
+// The six face-neighbor offsets, for the structural-support flood fill.
+const DIRS6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
 const nameSpan = e =>
   `<span style="color:${e.team === 'blue' ? '#8fa8ee' : '#8fd98f'}">${e.name}</span>`;
 
@@ -696,7 +699,10 @@ export class Game {
 
   // ---------------- combat ----------------
   fireHitscan(shooter, from, dir, spec) {
-    const spread = (spec.spread ?? 0) * (shooter.crouched ? 0.35 : 1); // crouch steadies aim
+    // Crouch steadies aim; iron sights steady it more (rifle ×0.5, SMG ×0.7 —
+    // the SMG keeps its close-range identity, the rifle owns aimed mid-range).
+    const spread = (spec.spread ?? 0) * (shooter.crouched ? 0.35 : 1)
+      * (shooter.aiming ? (spec.aimSpread ?? 0.6) : 1);
     const d = dir.clone()
       .add(new THREE.Vector3((Math.random() - .5) * spread * 2,
                              (Math.random() - .5) * spread * 2,
@@ -741,16 +747,16 @@ export class Game {
     // shot first — the bullet never reached the wall. (fireHitscan only ever
     // runs on the host/solo side, so this stays authoritative and the break
     // reaches clients through the edit broadcast.)
-    if (voxel && !hit) this.hitBlock(voxel.x, voxel.y, voxel.z, spec.damage ?? 20);
+    if (voxel && !hit) this.hitBlock(voxel.x, voxel.y, voxel.z, spec.damage ?? 20, shooter);
   }
 
-  hitBlock(x, y, z, dmg) {
+  hitBlock(x, y, z, dmg, who = null) {
     const key = x + ',' + y + ',' + z;
     const hp = (this.blockHits.get(key) ?? BLOCK_HP) - dmg;
     if (hp > 0) { this.blockHits.set(key, hp); return; }
     this.blockHits.delete(key);
     const v = this.world.get(x, y, z);
-    this.applyEdit(x, y, z, 0);
+    this.applyEdit(x, y, z, 0, who);
     this.effects.blockBurst([{ x, y, z, v }]);
   }
 
@@ -871,19 +877,93 @@ export class Game {
   }
 
   // ---------------- block tools ----------------
-  applyEdit(x, y, z, v) {
+  applyEdit(x, y, z, v, who = null) {
     this.blockHits.delete(x + ',' + y + ',' + z);  // fresh block / cleared cell: full HP
     this.world.set(x, y, z, v);
     if (this.mode === 'host') {
       this.editLog.push([x, y, z, v]);
       this.net.broadcast({ t: 'e', k: 'edit', x, y, z, v });
     }
+    if (!v) this._collapseFrom([{ x, y, z }], who); // cut the legs out? it falls
+  }
+
+  // Structural support: whatever isn't connected to bedrock comes down.
+  // Multi-source BFS from every solid face of the void a removal left. A
+  // clump that can't reach y=0 within the proof budget collapses; one bigger
+  // than the budget is assumed terrain and stays (collapses are for towers,
+  // bridges and bunkers — not for half the map). Host/solo only: clients
+  // replay the 'col' event so every world converges on the host's.
+  _collapseFrom(holes, who = null) {
+    if (this.mode === 'client' || !holes.length) return;
+    const CAP = 4000;
+    const key = (x, y, z) => x + ',' + y + ',' + z;
+    const seen = new Set();   // BFS-visited (grounded or doomed)
+    const seeded = new Set(); // dedupe only — seeds must NOT count as visited
+    const seeds = [];
+    for (const h of holes)
+      for (const d of DIRS6) {
+        const x = h.x + d[0], y = h.y + d[1], z = h.z + d[2], k = key(x, y, z);
+        if (!seeded.has(k) && this.world.solid(x, y, z)) { seeded.add(k); seeds.push({ x, y, z }); }
+      }
+    // Per connected component: a dig at a tower's base touches BOTH the
+    // terrain and the tower — the grounded dirt must not vouch for the
+    // severed tower. Each clump has to find its own way to bedrock.
+    const doomed = new Set();
+    for (const s of seeds) {
+      const sk = key(s.x, s.y, s.z);
+      if (seen.has(sk)) continue;
+      const comp = new Set([sk]);
+      const q = [s];
+      seen.add(sk);
+      let grounded = false;
+      for (let i = 0; i < q.length && !grounded; i++) {
+        const c = q[i];
+        if (c.y === 0 || comp.size > CAP) { grounded = true; break; }
+        for (const d of DIRS6) {
+          const x = c.x + d[0], y = c.y + d[1], z = c.z + d[2], k = key(x, y, z);
+          if (seen.has(k) || !this.world.solid(x, y, z)) continue;
+          seen.add(k); comp.add(k); q.push({ x, y, z });
+        }
+      }
+      if (!grounded) for (const k of comp) doomed.add(k);
+    }
+    if (!doomed.size) return;
+    // Down it comes: remove the clump, dust it, and hurt anyone standing in
+    // it or directly under it — a falling tower should kill.
+    const cells = [...doomed].map(k => {
+      const [x, y, z] = k.split(',').map(Number);
+      return { x, y, z, v: this.world.get(x, y, z) };
+    });
+    for (const c of cells) this.world.set(c.x, c.y, c.z, 0);
+    this.effects.blockBurst(cells.filter((_, i) => i % Math.ceil(cells.length / 48) === 0));
+    sfx.crumble();
+    for (const e of this.entities()) {
+      if (!e.alive) continue;
+      const b = e.body;
+      const x0 = Math.floor(b.pos.x - b.half.x), x1 = Math.floor(b.pos.x + b.half.x);
+      const y0 = Math.floor(b.pos.y),        y1 = Math.floor(b.pos.y + b.half.h);
+      const z0 = Math.floor(b.pos.z - b.half.x), z1 = Math.floor(b.pos.z + b.half.x);
+      let hit = 0;
+      for (let x = x0; x <= x1 && hit < 55; x++)
+        for (let z = z0; z <= z1 && hit < 55; z++) {
+          for (let y = y0; y <= y1; y++)
+            if (doomed.has(key(x, y, z))) { hit = 55; break; }
+          for (let y = y1 + 1; !hit && y <= y1 + 3; y++)
+            if (doomed.has(key(x, y, z))) hit = 30;
+        }
+      if (hit) this.damage(e, hit, who);
+    }
+    if (this.mode === 'host') {
+      for (const c of cells) this.editLog.push([c.x, c.y, c.z, 0]); // late joiners
+      this.net.broadcast({ t: 'e', k: 'col',
+        cells: cells.flatMap(c => [c.x, c.y, c.z]) });
+    }
   }
 
   digVoxel(who, x, y, z) {
     const v = this.world.get(x, y, z);
     if (!v) return;
-    this.applyEdit(x, y, z, 0);
+    this.applyEdit(x, y, z, 0, who);
     this.effects.blockBurst([{ x, y, z, v }]);
     if (who === this.player) {
       this.player.blocks = Math.min(99, this.player.blocks + 1);
@@ -973,7 +1053,7 @@ export class Game {
 
   _explode(g) {
     const R = 2.4; // a modest divot: grenades maim players, not landscapes
-    this.explodeAt(g.pos.x, g.pos.y, g.pos.z, R);
+    this.explodeAt(g.pos.x, g.pos.y, g.pos.z, R, g.owner);
     if (this.mode === 'host') {
       this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, R]);
       this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: R });
@@ -991,13 +1071,14 @@ export class Game {
   }
 
   // Visual + terrain side of an explosion — identical on host and clients.
-  explodeAt(x, y, z, r) {
+  explodeAt(x, y, z, r, owner = null) {
     const pos = new THREE.Vector3(x, y, z);
     this.effects.explode(pos);
     sfx.explosion();
     const removed = this.world.carve(Math.floor(x), Math.floor(y), Math.floor(z), r);
     this.effects.blockBurst(removed);
     this.effects.addShake(Math.max(0, 0.5 - pos.distanceTo(this.player.body.pos) * 0.012));
+    this._collapseFrom(removed, owner); // craters can drop whole structures
   }
 
   // ---------------- flag logic ----------------
@@ -1449,6 +1530,22 @@ export class Game {
         this.explodeAt(d.x, d.y, d.z, d.r);
         this.editLog.push(['b', d.x, d.y, d.z, d.r]);
         break;
+      case 'col': { // host collapsed a structure: replay removal + dust only
+        const cells = [];
+        for (let i = 0; i + 2 < d.cells.length; i += 3) {
+          const x = d.cells[i] | 0, y = d.cells[i + 1] | 0, z = d.cells[i + 2] | 0;
+          const v = this.world.get(x, y, z);
+          if (!v) continue;
+          this.world.set(x, y, z, 0);
+          this.editLog.push([x, y, z, 0]); // migration: we host next, maybe
+          cells.push({ x, y, z, v });
+        }
+        if (cells.length) {
+          this.effects.blockBurst(cells.filter((_, i) => i % Math.ceil(cells.length / 48) === 0));
+          sfx.crumble();
+        }
+        break;
+      }
       case 'shot':
         if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f));
         break;

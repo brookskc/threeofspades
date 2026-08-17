@@ -133,8 +133,8 @@ seconds apiece, each with a fresh seed.
 
 | Tool | Behavior |
 |---|---|
-| **Rifle** | Slow, precise, deadly. Headshots drop anyone. RMB to aim. |
-| **SMG** | Fast, sprayable, chews through people and cover alike. |
+| **Rifle** | Slow, precise, deadly. Headshots drop anyone. RMB raises true iron sights. |
+| **SMG** | Fast and sprayable up close — but sustained fire climbs: the muzzle walks upward until you pause or pull down. |
 | **Spade** | Digs any block in one hit, and doubles as a melee weapon. |
 | **Blocks** | Place team-colored cover anywhere. Dig blocks back to restock. |
 | **Grenades** | Bounce, cook for 2.4s, then carve a real crater out of the map. |
@@ -142,6 +142,16 @@ seconds apiece, each with a fresh seed.
 All terrain is destructible: spades and grenades remove blocks outright, and
 gunfire chips blocks by the same damage it deals to players. A rifle punches
 through a block in 3 shots, an SMG in 7. Cover is temporary.
+
+And gravity keeps score: any structure that loses its connection to the
+ground comes down. Cut a tower's legs, drop a bridge by shooting out its
+anchor, or let a grenade crater undermine a bunker — the whole clump
+collapses, and falling masonry hurts everyone inside it or standing under it.
+
+Aiming down the sights (`RMB`) zooms your view, halves rifle spread, and
+centers the gun — at the cost of moving slower. Recoil climbs while you
+hold the trigger and only starts recovering a beat after you stop, so bursts
+are a skill, not a suggestion.
 
 ### Controls
 
