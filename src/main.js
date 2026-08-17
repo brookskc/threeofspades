@@ -636,7 +636,7 @@ const clock = new THREE.Clock();
 let menuT = Math.PI * 0.15;
 let menuMapT = 0; // seconds the current backdrop map has been showing
 // Test hook: ?mmt=2 rotates every 2s.
-const MENU_MAP_EVERY = parseInt(params.get('mmt'), 10) || 30;
+const MENU_MAP_EVERY = parseInt(params.get('mmt'), 10) || 15;
 // The backdrop carousel only runs on the idle solo menu — never while
 // hosting (host world is authoritative) or connected as a client (a rebuild
 // would wipe the synced match). ?auto= disables it: tests drive the world
@@ -662,12 +662,25 @@ function frame() {
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;
-    // Rotate the backdrop across every map with a fresh seed each time.
+    // The backdrop follows the host prefs: a pinned map shows ONLY that map;
+    // "rotate" cycles just the maps the selected mode supports. The old
+    // carousel ignored both and cycled all six every 30s.
     if (carouselOn && game.mode === 'solo' && !net && !matchmaking) {
-      menuMapT += wallDt; // wall-clock: a stalled frame still counts its time
-      if (menuMapT >= MENU_MAP_EVERY) {
-        menuMapT = 0;
-        const next = (game.mapIndex + 1) % MAPS.length;
+      const pinned = parseInt(mapPref.value, 10);
+      const pool = MAPS.map((m, i) => i).filter(i => MAPS[i].modes.includes(modePref.value));
+      let next = -1;
+      if (pinned >= 0 && MAPS[pinned]?.modes.includes(modePref.value)) {
+        menuMapT = 0;                          // pinned: no rotation, ever
+        if (game.mapIndex !== pinned) next = pinned;
+      } else {
+        menuMapT += wallDt; // wall-clock: a stalled frame still counts its time
+        // Also jump when the mode switch stranded the backdrop off-pool.
+        if (menuMapT >= MENU_MAP_EVERY || !pool.includes(game.mapIndex)) {
+          menuMapT = 0;
+          next = pool[(pool.indexOf(game.mapIndex) + 1) % pool.length];
+        }
+      }
+      if (next >= 0) {
         game.rebuild(Math.floor(Math.random() * 1e9), next);
         game.player.vmRoot.visible = false; // rebuild respawns: no menu gun
         $('mapname').innerHTML = `now showing — <b>${MAPS[next].name}</b>`;

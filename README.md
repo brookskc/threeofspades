@@ -123,7 +123,9 @@ the next map in that pool with a fresh seed:
 | ![CROWN](docs/map-crown.png) | ![CALDERA](docs/map-caldera.png) |
 
 The home screen shows them off itself: the menu backdrop is a slow orbit that
-cycles through all six maps, thirty seconds apiece, each with a fresh seed.
+follows your host picks — pin a map and that's the only one you'll see; leave
+it on rotate and it cycles the maps your selected mode supports, fifteen
+seconds apiece, each with a fresh seed.
 
 ![Gameplay](docs/gameplay.png)
 
