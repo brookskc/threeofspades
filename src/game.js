@@ -12,12 +12,15 @@ import { Avatar } from './avatar.js';
 
 const WIN_SCORE = 3;
 // Team deathmatch: no flags, kills are points. ?killcap= lowers the bar for tests.
-const killcapParam = parseInt(new URLSearchParams(location.search).get('killcap'), 10);
+// Module-scope URL params are guarded so the file imports headless (Node
+// test harnesses have no `location`).
+const QUERY = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
+const killcapParam = parseInt(QUERY.get('killcap'), 10);
 const KILL_LIMIT = Number.isInteger(killcapParam) ? Math.max(2, killcapParam) : 30;
 // King of the hill: own the point to accrue hold time; first to HOLD_LIMIT
 // seconds wins. Flipping a held point takes CAP_TIME uncontested seconds on
 // it. ?kothtime= shrinks the clock for tests.
-const kothtimeParam = parseInt(new URLSearchParams(location.search).get('kothtime'), 10);
+const kothtimeParam = parseInt(QUERY.get('kothtime'), 10);
 const HOLD_LIMIT = Number.isInteger(kothtimeParam) ? Math.max(10, kothtimeParam) : 120;
 const CAP_TIME = 6;
 const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
@@ -26,10 +29,13 @@ const REDEPLOY = 10; // seconds back at base after dying — humans and bots ali
 // 7 shots, bot carbine 16 -> 10). The spade still digs in one hit.
 const BLOCK_HP = 150;
 // Hard cap on humans per room (host + guests). Test hook: ?cap=2.
-const capParam = parseInt(new URLSearchParams(location.search).get('cap'), 10);
+const capParam = parseInt(QUERY.get('cap'), 10);
 export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(8, Math.max(2, capParam)) : 8;
 const $ = id => document.getElementById(id);
 const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
+// Wire numbers are untrusted: a patched client sending NaN/Infinity coords
+// would poison hit detection and physics for the whole room.
+const finite3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
 const arr = v => [v.x, v.y, v.z];
 const FLAG_CODE = { home: 0, carried: 1, dropped: 2 };
 
@@ -428,6 +434,17 @@ const nameSpan = e =>
 const cleanName = n =>
   String(n ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'Player';
 
+// Feed rows arrive as host-composed HTML and land in innerHTML — and the
+// host is untrusted input like anyone else (a malicious room host could
+// otherwise XSS every client). Escape everything, then re-admit only the
+// two constructs our own composer emits: colored name spans and <b>.
+const safeFeedHtml = html => String(html ?? '').slice(0, 300)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/&lt;span style=&quot;color:(#[0-9a-fA-F]{6})&quot;&gt;/g, '<span style="color:$1">')
+  .replace(/&lt;span style="color:(#[0-9a-fA-F]{6})"&gt;/g, '<span style="color:$1">')
+  .replace(/&lt;\/span&gt;/g, '</span>')
+  .replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
+
 // A network player as the host sees them: client-authoritative position,
 // host-authoritative health, flags, and respawns.
 class RemoteProxy {
@@ -445,6 +462,9 @@ class RemoteProxy {
     this.blocks = 50;
     this.tool = 0;
     this.yaw = 0;
+    this.nades = 3;            // host-enforced grenade stock (mirrors Player)
+    this.nadeRegen = 0;
+    this._actT = {};           // per-action rate gates (host enforces, not trusts)
     this.avatar = new Avatar(game.scene, team, name);
     this.avatar.push(p.x, p.y, p.z, 0);
   }
@@ -461,6 +481,8 @@ class RemoteProxy {
     this.health = 100;
     this.alive = true;
     this.blocks = 50;
+    this.nades = 3;
+    this.nadeRegen = 0;
     this.game.net.sendTo(this.id, { t: 'e', k: 'spawn', x: p.x, y: p.y, z: p.z });
   }
 }
@@ -506,11 +528,17 @@ export class Game {
     this.flags = { green: new Flag(this, 'green'), blue: new Flag(this, 'blue') };
     this.captures = { green: 0, blue: 0 };
     this.grenades = [];
-    this.grenadeMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.14, 10, 8),
-      new THREE.MeshBasicMaterial({ color: 0x2e3b2e })
-    );
-    scene.add(this.grenadeMesh);
+    // A pool, not one shared mesh: several grenades can be airborne at once
+    // (two bots + a player), and a single mesh rendered only grenades[0].
+    const nadeGeo = new THREE.SphereGeometry(0.14, 10, 8);
+    const nadeMat = new THREE.MeshBasicMaterial({ color: 0x2e3b2e });
+    this.grenadeMeshes = [];
+    for (let i = 0; i < 16; i++) {
+      const m = new THREE.Mesh(nadeGeo, nadeMat);
+      m.visible = false;
+      scene.add(m);
+      this.grenadeMeshes.push(m);
+    }
     this.respawnTimers = new Map();
 
     hud.refreshTool(this.player);
@@ -552,7 +580,7 @@ export class Game {
     this.editLog = [];
     this.blockHits.clear();
     this.grenades = [];
-    this.grenadeMesh.visible = false;
+    for (const m of this.grenadeMeshes) m.visible = false;
     this.respawnTimers.clear();
     this.over = false;
     this._lastHealth = 100;
@@ -771,11 +799,12 @@ export class Game {
     if (this.flags && victim.carrier) {
       victim.carrier = false;
       this.flags[this.enemyOf(victim.team)].drop(victim.body.pos.clone());
-      hud.feed(`${nameSpan(victim)} dropped the flag`);
-      hud.message('FLAG DROPPED', '#ffd97a');
+      // this.feed/this.message, not hud.* — the wrappers relay to clients.
+      this.feed(`${nameSpan(victim)} dropped the flag`);
+      this.message('FLAG DROPPED', '#ffd97a');
     }
-    if (killer && killer !== victim) hud.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
-    else hud.feed(`${nameSpan(victim)} blew up`);
+    if (killer && killer !== victim) this.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
+    else this.feed(`${nameSpan(victim)} blew up`);
 
     // Deathmatch: a kill is a point. Suicides and the terrain score nothing.
     if (this.gameMode === 'tdm' && killer && killer !== victim && !this.over) {
@@ -884,9 +913,11 @@ export class Game {
         this._explode(g);
       }
     }
-    const g0 = this.grenades[0];
-    this.grenadeMesh.visible = !!g0;
-    if (g0) this.grenadeMesh.position.copy(g0.pos);
+    for (let i = 0; i < this.grenadeMeshes.length; i++) {
+      const g = this.grenades[i], m = this.grenadeMeshes[i];
+      m.visible = !!g;
+      if (g) m.position.copy(g.pos);
+    }
   }
 
   _explode(g) {
@@ -1066,22 +1097,46 @@ export class Game {
     if (!p) return;
     if (d.t === 'a' && d.k === 'chat') return this._hostOnChat(id, d.text, d.scope);
     if (d.t === 's') {
-      p.body.pos.set(d.x, d.y, d.z);
+      // Finite + bounded: a NaN here poisons every distance check downstream.
+      if (![d.x, d.y, d.z, d.yaw].every(Number.isFinite)) return;
+      p.body.pos.set(
+        Math.min(Math.max(d.x, 0), SX), Math.min(Math.max(d.y, -8), SY + 8),
+        Math.min(Math.max(d.z, 0), SZ));
       p.tool = d.tool;
       p.yaw = d.yaw;
       p.crouched = !!d.c;
-      p.avatar.push(d.x, d.y, d.z, d.yaw);
+      p.avatar.push(p.body.pos.x, p.body.pos.y, p.body.pos.z, p.yaw);
     } else if (d.t === 'a' && p.alive && !this.over) {
+      if (!finite3(d.o) || !finite3(d.d)) return;
       const o = v3(d.o), dir = v3(d.d).normalize();
       // Sanity: actions must originate near the proxy's known position.
       if (o.distanceToSquared(p.body.eye()) > 25) return;
+      // Rate-limit by the tool's own interval (60% floor for frame jitter):
+      // an honest client paces itself — a patched one must not get
+      // per-packet full-auto, a shovel blender, or a grenade sprinkler.
+      const now = this.time, gap = k => now - (p._actT[k] ?? -9);
       if (d.k === 'shoot') {
         const spec = TOOLS[d.tool];
-        if (spec?.damage) this.fireHitscan(p, o, dir, spec);
+        if (!spec?.damage || gap('shoot') < spec.interval * 0.6) return;
+        p._actT.shoot = now;
+        this.fireHitscan(p, o, dir, spec);
       }
-      else if (d.k === 'dig') this.playerDig(p, o, dir);
-      else if (d.k === 'place') this.playerPlace(p, o, dir);
-      else if (d.k === 'nade') this.throwGrenade(p, o, dir, 13);
+      else if (d.k === 'dig') {
+        if (gap('dig') < 0.2) return;
+        p._actT.dig = now;
+        this.playerDig(p, o, dir);
+      }
+      else if (d.k === 'place') {
+        if (gap('place') < 0.12) return;
+        p._actT.place = now;
+        this.playerPlace(p, o, dir); // tryBuild enforces the block count
+      }
+      else if (d.k === 'nade') {
+        if (gap('nade') < 0.6 || p.nades <= 0) return;
+        p._actT.nade = now;
+        p.nades--;
+        this.throwGrenade(p, o, dir, 13);
+      }
     }
   }
 
@@ -1092,7 +1147,10 @@ export class Game {
       return;
     }
     name = String(name ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'recruit';
-    const humans = { green: 1, blue: 0 }; // host is green
+    // Count the host on its ACTUAL team: after a baton pass the promoted
+    // host can be blue, and hardcoding green stacked every joiner wrong.
+    const humans = { green: 0, blue: 0 };
+    humans[this.player.team] = 1;
     for (const p of this.remote.values()) humans[p.team]++;
     const team = humans.green <= humans.blue ? 'green' : 'blue';
     const proxy = new RemoteProxy(this, id, name, team);
@@ -1225,7 +1283,8 @@ export class Game {
       t: 's',
       p: P,
       b: this.bots.map(b => [b.id, b.name, b.team, ...arr(b.body.pos),
-        b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0]),
+        b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0,
+        b.parts.crouched ? 1 : 0]), // crouch bit: clients drew ducking bots standing
       f: this.flags && {
         g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
         b: [FLAG_CODE[this.flags.blue.state], ...arr(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
@@ -1295,6 +1354,7 @@ export class Game {
       let av = this.avatars.get(key);
       if (!av) { av = new Avatar(this.scene, b[2], b[1]); this.avatars.set(key, av); }
       av.setAlive(!!b[7]);
+      av.setCrouch?.(!!b[10]); // host shrinks ducking bots; draw them that way
       av.push(b[3], b[4], b[5], b[6]);
     }
     // Anything not in this snapshot is gone (left the room / bot swapped out).
@@ -1338,7 +1398,7 @@ export class Game {
       case 'shot':
         if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f));
         break;
-      case 'feed': hud.feed(d.html); break;
+      case 'feed': hud.feed(safeFeedHtml(d.html)); break;
       case 'msg':
         if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
         break;
@@ -1369,13 +1429,20 @@ export class Game {
     hud.respawn(10);
   }
 
+  // Menu-open clients skip update() entirely (the frame loop freezes their
+  // world), but the watchdog must keep ticking or a host dropping mid-Esc
+  // is never detected.
+  clientIdleTick() {
+    if (this.lastRecv && performance.now() - this.lastRecv > 4000)
+      this.onHostSilent?.();
+  }
+
   _clientUpdate(dt) {
     // Host-drop watchdog: a host whose tab is killed (or network unplugged)
     // never sends a close frame — WebRTC silence is the only signal, and ICE
     // can take ages to give up on its own. Snapshots beat at 12Hz; four
     // seconds of silence means the host is gone and the baton must pass.
-    if (this.lastRecv && performance.now() - this.lastRecv > 4000)
-      this.onHostSilent?.();
+    this.clientIdleTick();
     // Cosmetic redeploy countdown — the host's 'rs' event is the real one.
     if (!this.player.alive && this._respawnT > 0) {
       this._respawnT -= dt;
@@ -1393,9 +1460,11 @@ export class Game {
         c: p.crouched ? 1 : 0 });
     }
     if (this.flags) for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
-    const g0 = this._lastGrenades?.[0];
-    this.grenadeMesh.visible = !!g0;
-    if (g0) this.grenadeMesh.position.set(g0[0], g0[1], g0[2]);
+    for (let i = 0; i < this.grenadeMeshes.length; i++) {
+      const g = this._lastGrenades?.[i], m = this.grenadeMeshes[i];
+      m.visible = !!g;
+      if (g) m.position.set(g[0], g[1], g[2]);
+    }
     this._shakeCamera();
     this.effects.update(dt);
   }
@@ -1414,7 +1483,7 @@ export class Game {
     this.time += dt;
     this.world.animateSky(this.time);
     hud.minimap(this);
-    if (this.mode === 'client') return this._clientUpdate(dt);
+    if (this.mode === 'client') { this._clientUpdate(dt); this.world.flushDirty(); return; }
 
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
@@ -1446,6 +1515,12 @@ export class Game {
       for (const p of this.remote.values()) {
         p.avatar.setAlive(p.alive);
         p.avatar.setCrouch?.(!!p.crouched);
+        // Crouching guests get the same hitbox as everyone else: the proxy
+        // body was staying full height, so a crouched guest was drawn short
+        // but shot tall. Same lerp the bots use.
+        p.body.half.h += ((p.crouched ? 1.15 : 1.75) - p.body.half.h) * Math.min(1, dt * 10);
+        // Grenade trickle, same terms as a local player: +1 per 12s, cap 3.
+        if (p.nades < 3 && (p.nadeRegen += dt) > 12) { p.nadeRegen = 0; p.nades++; }
         p.avatar.update(this.time);
       }
       this._snapT -= dt;
@@ -1458,6 +1533,9 @@ export class Game {
     // Camera shake rides on top of whatever the player camera did.
     this._shakeCamera();
     this.effects.update(dt);
+    // One remesh pass per frame: single-voxel set() calls queue their chunks
+    // here instead of each synchronously rebuilding up to 5 of them.
+    this.world.flushDirty();
   }
 }
 

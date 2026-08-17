@@ -113,18 +113,43 @@ export class VoxelWorld {
   set(x, y, z, v) {
     if (x < 0 || y < 0 || z < 0 || x >= SX || y >= SY || z >= SZ) return false;
     this.data[idx(x, y, z)] = v;
-    this.rebuildAt(x, z);
+    // Queue, don't rebuild: a bot dig swing can land 20 set() calls in one
+    // frame, and each used to synchronously remesh up to 5 chunks. The flush
+    // at end of Game.update remeshes each dirty chunk once.
+    this._markDirty(x, z);
     this.onEdit?.(x, z); // minimap: this column's pixel may have changed
     return true;
   }
 
+  // Chunks an edit at (x,z) can visibly affect: the home chunk, the
+  // orthogonal neighbor across a shared face, AND the diagonal neighbor
+  // across a shared corner — baked AO probes diagonals, so skipping the
+  // corner chunk leaves stale vertex colors there.
+  _markDirty(x, z, d = this.dirty ?? (this.dirty = new Set())) {
+    const cx = x >> 4, cz = z >> 4, xm = x & 15, zm = z & 15;
+    d.add(cx + ',' + cz);
+    if (xm === 0)  d.add((cx - 1) + ',' + cz);
+    if (xm === 15) d.add((cx + 1) + ',' + cz);
+    if (zm === 0)  d.add(cx + ',' + (cz - 1));
+    if (zm === 15) d.add(cx + ',' + (cz + 1));
+    if (xm === 0  && zm === 0)  d.add((cx - 1) + ',' + (cz - 1));
+    if (xm === 0  && zm === 15) d.add((cx - 1) + ',' + (cz + 1));
+    if (xm === 15 && zm === 0)  d.add((cx + 1) + ',' + (cz - 1));
+    if (xm === 15 && zm === 15) d.add((cx + 1) + ',' + (cz + 1));
+  }
+
+  flushDirty() {
+    if (!this.dirty?.size) return;
+    for (const k of this.dirty) {
+      const [cx, cz] = k.split(',').map(Number);
+      this.buildChunk(cx, cz);
+    }
+    this.dirty.clear();
+  }
+
   rebuildAt(x, z) {
-    const cx = x >> 4, cz = z >> 4;
-    this.buildChunk(cx, cz);
-    if ((x & 15) === 0)  this.buildChunk(cx - 1, cz);
-    if ((x & 15) === 15) this.buildChunk(cx + 1, cz);
-    if ((z & 15) === 0)  this.buildChunk(cx, cz - 1);
-    if ((z & 15) === 15) this.buildChunk(cx, cz + 1);
+    this._markDirty(x, z);
+    this.flushDirty();
   }
 
   buildAll() {
@@ -227,6 +252,10 @@ export class VoxelWorld {
 
   // Remove a sphere of voxels (grenades). Returns removed positions for debris.
   carve(cx, cy, cz, r) {
+    // Radius is wire-influenced in two places ('b' events, edit-log replay):
+    // an unbounded r is a synchronous 100k-voxel stall. One clamp, here,
+    // covers every caller. Nothing in the game carves deeper than ~4.
+    r = Math.min(Math.max(r || 0, 0), 6);
     const removed = [];
     const R = Math.ceil(r);
     for (let y = cy - R; y <= cy + R; y++)
@@ -237,14 +266,10 @@ export class VoxelWorld {
           removed.push({ x, y, z, v: this.get(x, y, z) });
           this.data[idx(x, y, z)] = 0;
         }
+    // Same neighbor rule as _markDirty, corners included: an explosion
+    // removing a corner voxel changes AO in the diagonal chunk too.
     const touched = new Set();
-    for (const p of removed) {
-      touched.add((p.x >> 4) + ',' + (p.z >> 4));
-      if ((p.x & 15) === 0)  touched.add(((p.x >> 4) - 1) + ',' + (p.z >> 4));
-      if ((p.x & 15) === 15) touched.add(((p.x >> 4) + 1) + ',' + (p.z >> 4));
-      if ((p.z & 15) === 0)  touched.add((p.x >> 4) + ',' + ((p.z >> 4) - 1));
-      if ((p.z & 15) === 15) touched.add((p.x >> 4) + ',' + ((p.z >> 4) + 1));
-    }
+    for (const p of removed) this._markDirty(p.x, p.z, touched);
     for (const k of touched) {
       const [cx2, cz2] = k.split(',').map(Number);
       this.buildChunk(cx2, cz2);

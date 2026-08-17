@@ -230,7 +230,11 @@ async function migrateRoom(deadNet) {
   const guest = deadNet.peer; // still open: our identity for the knock
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const t0 = performance.now();
+  // Wall-clock deadline: without it a flaky broker (claim/knock cycling
+  // 'taken' forever) strands the tab on "passing the baton" indefinitely.
+  const deadline = t0 + 60000 + rank * 3000;
   while (net === deadNet) { // a newer session would supersede this loop
+    if (performance.now() > deadline) return failMigration(guest);
     if (performance.now() - t0 >= rank * 3000) {
       console.debug(`[mig] gen${gen} rank${rank} claiming ${migCode}`);
       // Generous timeouts: a busy tab (throttled, backgrounded, or just
@@ -648,6 +652,13 @@ function frame() {
   // the host's own menu is up, or every client freezes with it.
   if (playing || game.mode === 'host') {
     game.update(dt);
+  } else if (game.mode === 'client') {
+    // Menu-open client: the world can freeze, but the host-silence watchdog
+    // must not — a host dropping while you're in the Esc menu has to fire
+    // the baton pass here, not on resume.
+    game.clientIdleTick();
+    // Slow cinematic orbit behind the menu.
+    menuT += dt * 0.05;
   } else {
     // Slow cinematic orbit behind the menu.
     menuT += dt * 0.05;
