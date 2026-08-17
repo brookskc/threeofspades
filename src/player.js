@@ -51,6 +51,9 @@ export class Player {
     addEventListener('keydown', e => {
       if (e.repeat || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
+      // TAB scoreboard works while dead too — the redeploy wait is exactly
+      // when you want it. preventDefault keeps browser focus in the page.
+      if (e.code === 'Tab') { e.preventDefault(); this.game.hud.statsShow(this.game); return; }
       if (!this.alive) return;
       if (e.code >= 'Digit1' && e.code <= 'Digit5')
         this._selectTool(Number(e.code.slice(-1)) - 1);
@@ -60,7 +63,10 @@ export class Player {
         this._reload();
       if (e.code === 'Space') this.body.jump();
     });
-    addEventListener('keyup', e => (this.keys[e.code] = false));
+    addEventListener('keyup', e => {
+      this.keys[e.code] = false;
+      if (e.code === 'Tab') this.game.hud.statsHide();
+    });
     // A click only counts if the pointer was already locked when it landed.
     // The click that re-locks the pointer must never fire the tool: it used
     // to throw a grenade nobody aimed (lock engaged a moment later, the held
@@ -182,6 +188,9 @@ export class Player {
     b.guard = this.crouched;
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
     const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1);
+    // Auto-step climbs one-block rises — but not at a sprint: charging
+    // full-tilt up terraces would make high ground too cheap.
+    b.step = sprint === 1;
     const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const r = new THREE.Vector3(-f.z, 0, f.x);
     const wish = new THREE.Vector3();

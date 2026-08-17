@@ -163,6 +163,33 @@ const hud = {
     const text = parts.join(' · ') || `first to ${WIN_SCORE} captures`;
     if (text !== this._lastFlags) { this._lastFlags = text; $('flagstate').textContent = text; }
   },
+  // Scoreboard table, sorted by kills. Shared by the TAB overlay and the
+  // end-of-round summary. Names are composed here from map keys that were
+  // cleanName'd (local) or sanitized on receipt (client), so plain text.
+  kdTable(g) {
+    const rows = [...g.kd.entries()]
+      .sort((a, b) => b[1].k - a[1].k || a[1].d - b[1].d || a[0].localeCompare(b[0]));
+    const me = g.player?.name;
+    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    let html = '<table class="kd"><tr><th></th><th>K</th><th>D</th><th>K/D</th></tr>';
+    for (const [name, r] of rows) {
+      const c = r.team === 'blue' ? '#8fa8ee' : '#8fd98f';
+      const ratio = (r.k / Math.max(1, r.d)).toFixed(2);
+      html += `<tr${name === me ? ' class="me"' : ''}>`
+        + `<td style="color:${c}">${esc(name)}</td>`
+        + `<td>${r.k}</td><td>${r.d}</td><td>${ratio}</td></tr>`;
+    }
+    return html + '</table>';
+  },
+  statsShow(g) {
+    $('statsbody').innerHTML = this.kdTable(g);
+    $('stats').style.display = 'block';
+  },
+  statsHide() { $('stats').style.display = 'none'; },
+  statsRefresh(g) {
+    if ($('stats').style.display === 'block')
+      $('statsbody').innerHTML = this.kdTable(g);
+  },
   feed(html) {
     const div = document.createElement('div');
     div.innerHTML = html;
@@ -540,6 +567,11 @@ export class Game {
       this.grenadeMeshes.push(m);
     }
     this.respawnTimers = new Map();
+    // Scoreboard: name -> { team, k, d }, seeded for every combatant so a
+    // 0/0 soldier still shows up. Host broadcasts the table on each death;
+    // clients replace their copy wholesale (names are unique enough keys).
+    this.kd = new Map();
+    this._kdSeed();
 
     hud.refreshTool(this.player);
     hud.health(this.player);
@@ -584,9 +616,19 @@ export class Game {
     this.respawnTimers.clear();
     this.over = false;
     this._lastHealth = 100;
+    this.kd = new Map(); // fresh round, fresh scoreboard
+    this._kdSeed();
     this.player.respawn();
     hud.score(this);
   }
+
+  _kdRow(e) {
+    let r = this.kd.get(e.name);
+    if (!r) this.kd.set(e.name, r = { team: e.team, k: 0, d: 0 });
+    r.team = e.team; // migration/rejoin could flip a name's side
+    return r;
+  }
+  _kdSeed() { for (const e of this.entities()) this._kdRow(e); }
 
   _spawnBots() {
     for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
@@ -805,6 +847,15 @@ export class Game {
     }
     if (killer && killer !== victim) this.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
     else this.feed(`${nameSpan(victim)} blew up`);
+
+    // Scoreboard: a death for the fallen, a kill for the killer — suicides
+    // and terrain score a death only, same as TDM team scoring below.
+    this._kdRow(victim).d++;
+    if (killer && killer !== victim) this._kdRow(killer).k++;
+    if (this.mode === 'host')
+      this.net.broadcast({ t: 'e', k: 'kd',
+        rows: [...this.kd].map(([n, r]) => [n, r.team, r.k, r.d]) });
+    hud.statsRefresh(this); // keep an open TAB overlay live
 
     // Deathmatch: a kill is a point. Suicides and the terrain score nothing.
     if (this.gameMode === 'tdm' && killer && killer !== victim && !this.over) {
@@ -1037,6 +1088,7 @@ export class Game {
     this.over = true;
     if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'end', winner });
     document.exitPointerLock();
+    hud.statsHide(); // the summary board replaces the overlay
     $('hud').classList.remove('on');
     const won = winner === this.player.team;
     $('endTitle').textContent = won ? 'VICTORY' : 'DEFEAT';
@@ -1046,6 +1098,7 @@ export class Game {
       ? `held the hill ${holdClock(this.captures.green)} — ${holdClock(this.captures.blue)}`
       : `wins ${this.captures.green} — ${this.captures.blue}`;
     $('endDetail').textContent = `${winner.toUpperCase()} ${score} · next up: ${next}`;
+    $('endBoard').innerHTML = hud.kdTable(this); // round summary: everyone's K/D
     $('end').classList.remove('hidden');
     if (!won) sfx.lose();
     // The room rotates maps on its own a few seconds after the final capture.
@@ -1155,6 +1208,7 @@ export class Game {
     const team = humans.green <= humans.blue ? 'green' : 'blue';
     const proxy = new RemoteProxy(this, id, name, team);
     this.remote.set(id, proxy);
+    this._kdRow(proxy); // scoreboard seat from the moment they join
     this._removeBot(team);
     this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog, mode: this.gameMode });
     this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
@@ -1412,6 +1466,12 @@ export class Game {
         this.player.respawn({ x: d.x, y: d.y, z: d.z });
         hud.respawn(0); hud.health(this.player); hud.refreshTool(this.player);
         this._lastHealth = 100;
+        break;
+      case 'kd': // host's scoreboard, replaced wholesale on each death
+        this.kd = new Map((d.rows || []).map(r =>
+          [cleanName(r[0]), { team: r[1] === 'blue' ? 'blue' : 'green',
+                              k: r[2] | 0, d: r[3] | 0 }]));
+        hud.statsRefresh(this);
         break;
       case 'end': this._end(d.winner); break;
       case 'restart':

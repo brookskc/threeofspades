@@ -114,7 +114,21 @@
   .controls b { color:#ffd97a; font-weight:600; }
   #endTitle { font-size:52px; font-weight:800; letter-spacing:4px; }
   #endDetail { margin-top:10px; font-size:16px; opacity:.75; }
+  #endBoard { margin-top:22px; display:flex; justify-content:center; }
   #endNote { margin-top:34px; font-size:13px; letter-spacing:3px; opacity:.5; }
+
+  /* ---------- scoreboard (TAB overlay + end-of-round summary) ---------- */
+  table.kd { border-collapse:collapse; font-size:14px; min-width:260px;
+    background:rgba(10,14,22,.72); border:1px solid rgba(255,255,255,.12);
+    border-radius:10px; overflow:hidden; }
+  table.kd th, table.kd td { padding:6px 14px; text-align:center; }
+  table.kd th:first-child, table.kd td:first-child { text-align:left; }
+  table.kd th { font-size:11px; letter-spacing:2px; opacity:.55;
+    border-bottom:1px solid rgba(255,255,255,.12); }
+  table.kd tr.me td { background:rgba(255,255,255,.08); font-weight:700; }
+  #stats { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    display:none; text-align:center; }
+  #stats .kdtitle { font-size:12px; letter-spacing:3px; opacity:.6; margin-bottom:8px; }
 
   /* ---------- HUD ---------- */
   #hud { position:fixed; inset:0; pointer-events:none; z-index:10; opacity:0;
@@ -226,7 +240,8 @@
         <input id="chatin" maxlength="120" placeholder="message…" autocomplete="off">
       </div>
     </div>
-    <div id="chatkey">T chat · Y team</div>
+    <div id="chatkey">T chat · Y team · TAB scores</div>
+    <div id="stats"><div class="kdtitle">SCOREBOARD</div><div id="statsbody"></div></div>
   </div>
 
   <div class="screen" id="menu">
@@ -260,11 +275,11 @@
     </div>
     <div id="mapname" class="home-only">now showing — <b>GREENBELT</b></div>
     <div class="controls home-only">
-      <div><b>W A S D</b> move &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
+      <div><b>W A S D</b> move — one-block rises are stairs, just walk up &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 5 · Q · E</b> rifle · smg · spade · block · grenade &nbsp;·&nbsp; <b>R</b> reload</div>
       <div><b>CTRL</b> crouch — slower, steadier aim, and you cannot be walked off a ledge</div>
-      <div><b>T</b> chat the room &nbsp;·&nbsp; <b>Y</b> chat your team &nbsp;·&nbsp; <b>ENTER</b> send &nbsp;·&nbsp; redeploy takes 10s</div>
+      <div><b>TAB</b> scoreboard &nbsp;·&nbsp; <b>T</b> chat the room &nbsp;·&nbsp; <b>Y</b> chat your team &nbsp;·&nbsp; redeploy takes 10s</div>
       <div><b>MISSION</b> the host picks the battle — capture the flag · team deathmatch · king of the hill</div>
       <div><b>QUICK MATCH</b> drops you into the fullest public room with space — up to 8 players</div>
     </div>
@@ -283,6 +298,7 @@
   <div class="screen hidden" id="end">
     <div id="endTitle">VICTORY</div>
     <div id="endDetail"></div>
+    <div id="endBoard"></div>
     <div id="endNote">rotating to the next map…</div>
   </div>
 

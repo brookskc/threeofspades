@@ -145,13 +145,17 @@ through a block in 3 shots, an SMG in 7. Cover is temporary.
 
 ### Controls
 
-`WASD` move · `Space` jump/swim · `Shift` sprint · `CTRL` crouch (slower,
+`WASD` move — one-block rises are stairs: walk into them and you step up,
+no jump needed (sprinting past them stays flat, so a charge doesn't become
+a free climb) · `Space` jump/swim · `Shift` sprint · `CTRL` crouch (slower,
 steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
 taller than one block, though single steps still pass so slopes stay walkable)
 · `LMB` fire/dig/place/throw · `RMB` aim · `1-5` / `Q`·`E` select tool (the
 grenade is slot 5, three per life, one trickles back every 12 s) · `R` reload ·
-`T` / `Y` chat the room / your team · `Esc` pause (in a match: resume or back
-to the main menu). Death costs 10 seconds on the redeploy timer, for humans and
+`TAB` scoreboard · `T` / `Y` chat the room / your team · `Esc` pause (in a
+match: resume or back to the main menu). Kills and deaths are tracked all
+round — hold `TAB` for the live table, and the end screen closes every match
+with everyone's K, D, and K/D. Death costs 10 seconds on the redeploy timer, for humans and
 bots alike, so clearing a base actually clears it. A minimap in the top left
 shows the terrain (craters and all), both flag stands and the live position of
 each flag (or the hill ring, tinted by who holds it and flashing white while

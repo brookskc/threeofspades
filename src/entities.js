@@ -53,6 +53,17 @@ export class Body {
             else p.y = y - h.h - 0.001;
             this.vel.y = 0;
           } else {
+            // Auto-step: grounded and walking into a one-block rise with
+            // headroom? Treat it as a stair, not a wall — lift onto it and
+            // let the y-pass settle. Gated on walking (step === false while
+            // sprinting) and never mid-air, so it can't grab a ledge you
+            // were trying to drop past or turn sprint into a hill-climb.
+            // p[axis] already holds the advanced position; _stepFits tests it.
+            if (this.step !== false && this.onGround && !this.inWater
+                && this.vel.y <= 0.01 && this._stepFits()) {
+              p.y += 1.001;
+              return;
+            }
             const sign = Math.sign(delta);
             p[axis] = sign > 0
               ? (axis === 'x' ? x : z) - h.x - 0.001
@@ -61,6 +72,20 @@ export class Body {
           }
           return;
         }
+  }
+
+  // Would the AABB fit if lifted one block at the current position, with
+  // footing under the lifted feet? Caller has already advanced pos[axis].
+  _stepFits() {
+    const p = this.pos, h = this.half, y = p.y + 1.001;
+    const x0 = Math.floor(p.x - h.x), x1 = Math.floor(p.x + h.x);
+    const y0 = Math.floor(y),        y1 = Math.floor(y + h.h);
+    const z0 = Math.floor(p.z - h.x), z1 = Math.floor(p.z + h.x);
+    for (let yy = y0; yy <= y1; yy++)
+      for (let z = z0; z <= z1; z++)
+        for (let x = x0; x <= x1; x++)
+          if (this.world.solid(x, yy, z)) return false;
+    return this._footing(y0);
   }
 
   // Is there ground within one step anywhere under the footprint?
