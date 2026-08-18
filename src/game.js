@@ -55,11 +55,11 @@ const rowsEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 // host omits unchanged rows, so these maps — not the last packet — are the
 // world as the host sees it, and the replica a promoted client rebuilds
 // from. Decoded row shapes:
-//   player: [x, y, z, ry, hp, alive, carrier, tool, blocks, crouch]
+//   player: [x, y, z, ry, hp, alive, carrier, tool, blocks, crouch, nades]
 //   bot:    [x, y, z, ry, hp, alive, carrier, crouch]
 export function mergeSnapshot(fullP, fullB, d) {
   for (const r of d.p ?? [])
-    fullP.set(r[0], [dx(r[1]), dy(r[2]), dx(r[3]), da(r[4]), r[5], r[6], r[7], r[8], r[9], r[10]]);
+    fullP.set(r[0], [dx(r[1]), dy(r[2]), dx(r[3]), da(r[4]), r[5], r[6], r[7], r[8], r[9], r[10], r[11]]);
   for (const r of d.b ?? [])
     fullB.set(r[0], [dx(r[1]), dy(r[2]), dx(r[3]), da(r[4]), r[5], r[6], r[7], r[8]]);
   for (const i of d.rm?.p ?? []) fullP.delete(i);
@@ -195,16 +195,16 @@ const hud = {
   // end-of-round summary. Names are composed here from map keys that were
   // cleanName'd (local) or sanitized on receipt (client), so plain text.
   kdTable(g) {
-    const rows = [...g.kd.entries()]
-      .sort((a, b) => b[1].k - a[1].k || a[1].d - b[1].d || a[0].localeCompare(b[0]));
-    const me = g.player?.name;
-    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const rows = [...g.kd.entries()].sort((a, b) =>
+      b[1].k - a[1].k || a[1].d - b[1].d || (a[1].name ?? '').localeCompare(b[1].name ?? ''));
+    const me = g.player ? g._kdKey(g.player) : null;
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
     let html = '<table class="kd"><tr><th></th><th>K</th><th>D</th><th>K/D</th></tr>';
-    for (const [name, r] of rows) {
+    for (const [key, r] of rows) {
       const c = r.team === 'blue' ? '#8fa8ee' : '#8fd98f';
       const ratio = (r.k / Math.max(1, r.d)).toFixed(2);
-      html += `<tr${name === me ? ' class="me"' : ''}>`
-        + `<td style="color:${c}">${esc(name)}</td>`
+      html += `<tr${key === me ? ' class="me"' : ''}>`
+        + `<td style="color:${c}">${esc(r.name)}</td>`
         + `<td>${r.k}</td><td>${r.d}</td><td>${ratio}</td></tr>`;
     }
     return html + '</table>';
@@ -676,10 +676,20 @@ export class Game {
     hud.score(this);
   }
 
+  // Scoreboard rows are keyed by roster index, not by display name: the bot
+  // name pool is small and nothing stops a human typing a bot's callsign, and
+  // two entities sharing a name used to share one row.
+  _kdKey(e) {
+    if (e === this.player) return 'p' + (this.mode === 'client' ? (this.myIdx ?? 0) : this._hostIdx);
+    if (e.isRemote) return 'p' + e.ridx;
+    return 'b' + e.id;
+  }
   _kdRow(e) {
-    let r = this.kd.get(e.name);
-    if (!r) this.kd.set(e.name, r = { team: e.team, k: 0, d: 0 });
-    r.team = e.team; // migration/rejoin could flip a name's side
+    const key = this._kdKey(e);
+    let r = this.kd.get(key);
+    if (!r) this.kd.set(key, r = { name: e.name, team: e.team, k: 0, d: 0 });
+    r.name = e.name;
+    r.team = e.team; // migration/rejoin could flip an index's side
     return r;
   }
   _kdSeed() { for (const e of this.entities()) this._kdRow(e); }
@@ -941,7 +951,7 @@ export class Game {
     if (killer && killer !== victim) this._kdRow(killer).k++;
     if (this.mode === 'host')
       this.net.broadcast({ t: 'e', k: 'kd',
-        rows: [...this.kd].map(([n, r]) => [n, r.team, r.k, r.d]) });
+        rows: [...this.kd].map(([key, r]) => [key, r.name, r.team, r.k, r.d]) });
     hud.statsRefresh(this); // keep an open TAB overlay live
 
     // Deathmatch: a kill is a point. Suicides and the terrain score nothing.
@@ -978,7 +988,6 @@ export class Game {
     if (this.mode === 'client' || !holes.length) return;
     const CAP = 4000;
     const key = (x, y, z) => x + ',' + y + ',' + z;
-    const seen = new Set();   // BFS-visited (grounded or doomed)
     const seeded = new Set(); // dedupe only — seeds must NOT count as visited
     const seeds = [];
     for (const h of holes)
@@ -989,23 +998,34 @@ export class Game {
     // Per connected component: a dig at a tower's base touches BOTH the
     // terrain and the tower — the grounded dirt must not vouch for the
     // severed tower. Each clump has to find its own way to bedrock.
+    // Cells carry a VERDICT, not just a visited mark. A shared visited set
+    // was wrong: when one clump exits early on reaching bedrock it leaves a
+    // half-explored frontier marked visited with no answer recorded, and the
+    // next seed in that same clump can't expand through it — so it measures
+    // a small isolated blob and condemns terrain that is perfectly held up.
+    // Fuzzing found this on ~3% of digs, always in the "drops what should
+    // stand" direction. Reaching an already-resolved cell means same clump,
+    // same answer: inherit it and stop.
+    const verdict = new Map(); // cell -> grounded?
     const doomed = new Set();
     for (const s of seeds) {
       const sk = key(s.x, s.y, s.z);
-      if (seen.has(sk)) continue;
+      if (verdict.has(sk)) continue;
       const comp = new Set([sk]);
       const q = [s];
-      seen.add(sk);
-      let grounded = false;
-      for (let i = 0; i < q.length && !grounded; i++) {
+      let grounded = false, settled = false;
+      for (let i = 0; i < q.length && !settled; i++) {
         const c = q[i];
         if (c.y === 0 || comp.size > CAP) { grounded = true; break; }
         for (const d of DIRS6) {
           const x = c.x + d[0], y = c.y + d[1], z = c.z + d[2], k = key(x, y, z);
-          if (seen.has(k) || !this.world.solid(x, y, z)) continue;
-          seen.add(k); comp.add(k); q.push({ x, y, z });
+          if (comp.has(k) || !this.world.solid(x, y, z)) continue;
+          const known = verdict.get(k);
+          if (known !== undefined) { grounded = known; settled = true; break; }
+          comp.add(k); q.push({ x, y, z });
         }
       }
+      for (const k of comp) verdict.set(k, grounded);
       if (!grounded) for (const k of comp) doomed.add(k);
     }
     if (!doomed.size) return;
@@ -1059,6 +1079,7 @@ export class Game {
   }
 
   playerDig(p, origin = null, dir = null) {
+    p.protT = 0; // swinging is firing: melee must not stay invulnerable
     origin = origin ?? p.body.eye();
     dir = dir ?? p.lookDir();
     const hit = this.world.raycast(origin, dir, 5);
@@ -1150,8 +1171,15 @@ export class Game {
     const R_DMG = 9;
     for (const e of this.entities()) {
       if (!e.alive) continue;
-      const d = g.pos.distanceTo(e.body.pos.clone().add(new THREE.Vector3(0, 0.9, 0)));
-      if (d < R_DMG) this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner);
+      const center = e.body.pos.clone().add(new THREE.Vector3(0, 0.9, 0));
+      const d = g.pos.distanceTo(center);
+      if (d >= R_DMG) continue;
+      // Cover has to mean something: the crater is only 2.4 blocks, so
+      // without this a grenade behind a wall it never breached still dealt
+      // 75 damage through solid stone. Point blank (inside the crater) still
+      // kills regardless — you were standing in the fireball.
+      if (d > R && !this.losClear(g.pos, center)) continue;
+      this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner);
     }
   }
 
@@ -1478,6 +1506,7 @@ export class Game {
     if (this.hill && this._hillRow) {
       this.hill.owner = this._hillRow[0];
       this.hill.progress = this._hillRow[1];
+      this.hill.contested = !!this._hillRow[2];
       this.hill.capTeam = this._hillRow[3];
     }
     // A death mid-handover still gets its respawn; a finished match still
@@ -1486,13 +1515,35 @@ export class Game {
     if (this.over) this._rotateT = 2;
     // Stragglers get a minute to find the new room before their roster entry
     // lapses and any later knock is treated as a fresh join.
-    setTimeout(() => { this._migRoster = null; }, 60000);
+    setTimeout(() => {
+      // Anyone who never found the new room is gone for good. Their proxy has
+      // no channel, so hostOnLeave can never fire for it, and it would stand
+      // in the world forever holding a roster seat and a slot against
+      // MAX_HUMANS. Retire them the same way a normal leave does.
+      const stale = [...(this._migRoster?.keys() ?? [])];
+      this._migRoster = null;
+      if (this.mode !== 'host') return;
+      for (const id of stale) {
+        const p = this.remote.get(id);
+        if (!p) continue;
+        if (p.carrier && this.flags) {
+          p.carrier = false;
+          this.flags[this.enemyOf(p.team)].drop(p.body.pos.clone());
+        }
+        p.avatar.dispose();
+        this.remote.delete(id);
+        this.respawnTimers.delete(p);
+        if (!this.over) this.bots.push(new Bot(this, p.team));
+        this.feed(`${nameSpan(p)} never made it back`);
+      }
+      if (stale.length) this.net.broadcast(this._rosterMsg());
+    }, 60000);
   }
 
   // Rebuild one RemoteProxy from its reconstructed full-state row
   // ([x, y, z, ry, hp, alive, carrier, tool, blocks, crouch]).
   _restoreProxy(id, name, idx, team, row) {
-    const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = row;
+    const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch, nades] = row;
     const proxy = new RemoteProxy(this, id, name, team);
     proxy.ridx = idx;
     proxy.body.pos.set(x, y, z);
@@ -1504,6 +1555,7 @@ export class Game {
     proxy.tool = tool;
     proxy.blocks = blocks;
     proxy.crouched = !!crouch;
+    if (nades !== undefined) proxy.nades = nades;
     if (!proxy.alive) this.respawnTimers.set(proxy, REDEPLOY);
     this.remote.set(id, proxy);
     return proxy;
@@ -1522,6 +1574,23 @@ export class Game {
     this.respawnTimers.delete(p);
     if (!this.over) this.bots.push(new Bot(this, p.team));
     this.net.broadcast(this._rosterMsg()); // seat emptied, bot filled in
+    this._checkAbandoned();
+  }
+
+  // Everyone vanishing at once usually means they didn't leave — we did.
+  // A stalled tab, a dropped uplink: the survivors' watchdogs fired, the
+  // baton passed, and this room carried on hosting nobody while still
+  // answering matchmaking. We can't detect that from inside, so say so
+  // rather than act on it — a host that genuinely emptied out normally is
+  // still a room worth keeping open.
+  _checkAbandoned() {
+    if (this.mode !== 'host') return;
+    const now = performance.now();
+    this._leaveTimes = [...(this._leaveTimes ?? []), now].filter(t => now - t < 3000);
+    if (this._leaveTimes.length >= 2 && this.remote.size === 0) {
+      this._leaveTimes = [];
+      this.onAbandoned?.();
+    }
   }
 
   _removeBot(team) {
@@ -1541,10 +1610,11 @@ export class Game {
     const P = [[this._hostIdx, ...pos(this.player.body.pos), qa(ry(this.player.yaw)),
       Math.round(this.player.health), this.player.alive ? 1 : 0,
       this.player.carrier ? 1 : 0, this.player.tool, this.player.blocks,
-      this.player.crouched ? 1 : 0]];
+      this.player.crouched ? 1 : 0, this.player.grenades]];
     for (const p of this.remote.values())
       P.push([p.ridx, ...pos(p.body.pos), qa(p.yaw), Math.round(p.health),
-        p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks, p.crouched ? 1 : 0]);
+        p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks, p.crouched ? 1 : 0,
+        p.nades]);
     return {
       t: 's',
       p: P,
@@ -1657,7 +1727,7 @@ export class Game {
     mergeSnapshot(this._fullP, this._fullB, d);
     const want = new Set();
     for (const [idx, r] of this._fullP) {
-      const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = r;
+      const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch, nades] = r;
       if (idx === this.myIdx) {
         if (!alive && this.player.alive) this._clientDied();
         if (health < this._lastHealth) { hud.damage(); sfx.hurt(); }
@@ -1665,6 +1735,13 @@ export class Game {
         this.player.health = health;
         this.player.blocks = blocks;
         this.player.carrier = !!carrier;
+        // The host owns the grenade stock (its rate gate can refuse a throw
+        // the client already counted). Without this the HUD drifts and the
+        // belt eventually reads full while every throw is silently rejected.
+        if (nades !== undefined && nades !== this.player.grenades) {
+          this.player.grenades = nades;
+          if (this.player.tool === 4) hud.refreshTool(this.player);
+        }
         hud.health(this.player);
         if (this.player.tool === 3) hud.refreshTool(this.player);
         continue;
@@ -1770,8 +1847,9 @@ export class Game {
         break;
       case 'kd': // host's scoreboard, replaced wholesale on each death
         this.kd = new Map((d.rows || []).map(r =>
-          [cleanName(r[0]), { team: r[1] === 'blue' ? 'blue' : 'green',
-                              k: r[2] | 0, d: r[3] | 0 }]));
+          [String(r[0]).slice(0, 8), { name: cleanName(r[1]),
+                                       team: r[2] === 'blue' ? 'blue' : 'green',
+                                       k: r[3] | 0, d: r[4] | 0 }]));
         hud.statsRefresh(this);
         break;
       case 'end': this._end(d.winner); break;
@@ -1873,6 +1951,14 @@ export class Game {
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
     for (const b of this.bots) b.update(dt);
+
+    // Fell out of the world: Body parked them above the sea and raised the
+    // flag. Kill them properly so the flag drops and the redeploy timer runs.
+    for (const e of this.entities()) {
+      if (!e.body?.voidFall) continue;
+      e.body.voidFall = false;
+      if (e.alive) this.damage(e, 1000, null);
+    }
 
     // Footsteps + spawn-protection drain, from actual ground covered:
     // every 2.2 blocks of grounded travel sounds a step where they are, and

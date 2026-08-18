@@ -24,7 +24,12 @@ export class Body {
     this.onGround = false;
     this._axis('y', this.vel.y * dt);
     this.inWater = this.pos.y < SEA + 0.4;
-    if (this.pos.y < -8) { this.pos.y = SEA + 10; this.vel.set(0, 0, 0); } // safety net
+    // Safety net: a body that leaves the world gets parked above sea level
+    // and FLAGGED. Without the flag it just falls again forever — nothing
+    // else kills it, so a grenade chain that digs a shaft to bedrock used to
+    // strand a player in an endless loop. Game.update reads voidFall and
+    // kills, which routes through the normal death (flag drop, respawn).
+    if (this.pos.y < -8) { this.pos.y = SEA + 10; this.vel.set(0, 0, 0); this.voidFall = true; }
   }
 
   _axis(axis, delta) {

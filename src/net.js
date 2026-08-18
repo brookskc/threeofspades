@@ -24,6 +24,15 @@ export class Net {
   // the matchmaking handshake (e.g. attach the game once a room accepts us).
   constructor() { this.handlers = {}; }
 
+  // Replay anything that arrived before handlers existed. Call right after
+  // assigning this.handlers on a host Net that came from _claim.
+  flushPending() {
+    const q = this._pending;
+    this._pending = null;
+    if (!q || !this.handlers.onData) return;
+    for (const [id, d] of q) this.handlers.onData(id, d);
+  }
+
   // ---------------- host ----------------
   static host(code, handlers) {
     const net = new Net();
@@ -44,7 +53,19 @@ export class Net {
         // steal the slot; whichever live channel opens last rightfully wins.
         net.conns.set(conn.peer, conn);
       });
-      conn.on('data', d => net.handlers.onData?.(conn.peer, d));
+      conn.on('data', d => {
+        // A claimed room exists before its handlers do: _claim builds the Net
+        // with {} and adoption attaches onData a beat later. A survivor whose
+        // 'hi' lands in that window used to be answered with silence, and it
+        // then sat out its full knock timeout before retrying. Buffer instead
+        // and replay on attach — a frozen world for 15s was never worth it.
+        if (!net.handlers.onData) {
+          (net._pending ??= []).push([conn.peer, d]);
+          if (net._pending.length > 64) net._pending.shift();
+          return;
+        }
+        net.handlers.onData(conn.peer, d);
+      });
       const drop = () => {
         console.debug(`[net] conn drop ${conn.peer}`);
         // Delete only if WE are the mapped connection: a zombie channel from

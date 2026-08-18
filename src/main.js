@@ -170,6 +170,8 @@ function adoptHost(n, code, opts = {}) {
     onData: (id, d) => game.hostOnData(id, d),
     onLeave: id => game.hostOnLeave(id),
   };
+  game.onAbandoned = abandonedNotice;
+  n.flushPending?.(); // anything that knocked while the slot had no handlers
   if (opts.alreadyOpen) n.handlers.onOpen();
 }
 
@@ -182,6 +184,15 @@ function adoptHost(n, code, opts = {}) {
 // promotes its replica to host; the rest knock until it answers. From the
 // players' seats the world freezes for a few seconds, then just continues.
 let migrationGen = 0; // which baton pass this room is on
+
+// Every client dropping at once is the signature of the room having moved on
+// without us (our tab stalled, our uplink died, the survivors migrated). We
+// can't prove it from this side, so tell the player and let them decide.
+function abandonedNotice() {
+  game.hud.message('EVERYONE DISCONNECTED AT ONCE', '#ffd97a');
+  status('every player dropped at once — if your connection stalled, they may have '
+    + 'moved to a new room. Leave and quick-match again to find them.');
+}
 
 function failMigration(guest) {
   guest?.destroy();
@@ -203,8 +214,12 @@ function adoptMigratedHost(n, code, gen) {
     onLeave: id => game.hostOnLeave(id),
     onError: e => status(`network error: ${e.type}`),
   };
+  game.onAbandoned = abandonedNotice;
   console.debug(`[mig] promoted to host of ${code}`);
   game.promoteToHost(n);
+  // Survivors who knocked between the claim and this moment were buffered,
+  // not dropped — hand them to the now-live handlers.
+  n.flushPending?.();
   $('roomcode').querySelector('b').textContent = code;
   game.hud.message('BATON PASSED — YOU ARE HOSTING THE MATCH', '#ffd97a');
   status('the host dropped — <b>you are hosting now</b>');
@@ -252,15 +267,18 @@ async function migrateRoom(deadNet) {
       console.debug(`[mig] claim -> ${c.kind}`);
       if (net !== deadNet) { c.net?.destroy(); return; }
       if (c.kind === 'host') { guest.destroy(); return adoptMigratedHost(c.net, migCode, gen); }
-      if (c.kind === 'down') return failMigration(guest);
-      // 'taken' — someone beat us to the baton; fall through and knock
+      // 'down' is the broker not answering in time — the same flakiness that
+      // may have taken the host out in the first place, so it is exactly when
+      // giving up is wrong. Fall through, knock, and let the deadline above
+      // be the only thing that calls it. 'taken' means someone beat us to the
+      // baton: also fall through and knock.
     }
     const k = await Net._knock(guest, migCode, game.player.name, 15000);
     console.debug(`[mig] gen${gen} knock ${migCode} -> ${k.kind}`);
     if (net !== deadNet) { k.conn?.close(); return; }
     if (k.kind === 'join') return adoptMigratedClient(guest, k.conn, migCode, k.welcome, gen);
-    if (k.kind === 'down') return failMigration(guest);
-    await sleep(700);
+    await sleep(700); // 'dead' (nobody hosting yet) and 'down' (broker hiccup)
+                      // both just mean: try again until the deadline.
   }
 }
 
@@ -663,6 +681,32 @@ const MENU_MAP_EVERY = parseInt(params.get('mmt'), 10) || 15;
 // directly and would lose their terrain mid-scenario.
 const carouselOn = !params.get('auto');
 
+// Last time the simulation actually stepped, from either driver below.
+let lastSimT = performance.now();
+
+// Browsers PAUSE requestAnimationFrame in a hidden tab. Since rAF was the
+// only thing calling game.update, a host that alt-tabbed stopped sending
+// snapshots entirely, every client's 4s watchdog fired, and the room migrated
+// away from a host that was alive and unaware — leaving two rooms and a
+// zombie holding the original id. Timers in a hidden tab are throttled to
+// ~1Hz but not stopped, so this fallback keeps the authoritative sim (and its
+// snapshots) beating slowly instead of dying. While the tab is visible rAF
+// runs at 60Hz, lastSimT stays fresh, and this never fires.
+setInterval(() => {
+  const now = performance.now();
+  if (now - lastSimT < 250) return; // rAF is healthy — leave it alone
+  if (game.mode === 'client') { game.clientIdleTick(); lastSimT = now; return; }
+  if (game.mode !== 'host') { lastSimT = now; return; }
+  // Step at most one interval's worth per tick. Catching up fully would fire
+  // a burst of ~15 snapshots at once, which scrambles every client's arrival
+  // statistics and inflates their send buffer. The honest trade: a hidden
+  // host's match runs slowly rather than pausing. Slow is recoverable; the
+  // room splitting in two is not.
+  let owed = Math.min((now - lastSimT) / 1000, 0.25);
+  lastSimT = now;
+  while (owed > 0) { const step = Math.min(owed, 0.05); game.update(step); owed -= step; }
+}, 250);
+
 function frame() {
   requestAnimationFrame(frame);
   const wallDt = clock.getDelta();          // real elapsed time
@@ -671,8 +715,10 @@ function frame() {
   // The host is authoritative — the simulation must never pause, even while
   // the host's own menu is up, or every client freezes with it.
   if (playing || game.mode === 'host') {
+    lastSimT = performance.now();
     game.update(dt);
   } else if (game.mode === 'client') {
+    lastSimT = performance.now();
     // Menu-open client: the world can freeze, but the host-silence watchdog
     // must not — a host dropping while you're in the Esc menu has to fire
     // the baton pass here, not on resume.
