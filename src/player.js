@@ -60,13 +60,22 @@ export class Player {
     addEventListener('keydown', e => {
       if (e.repeat) return;
       // Typing beats game keys — but only where typing makes sense: the
-      // chat box, or a lobby input while the menu is actually up. The menu
+      // chat box, or a lobby widget while the menu is actually up. The menu
       // fades out with opacity (still laid out), so a callsign box left
       // focused after deploy would otherwise keep eating WASD mid-match.
-      if (e.target.tagName === 'INPUT') {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
         const menuUp = !document.getElementById('menu').classList.contains('hidden');
         if (e.target.id === 'chatin' || menuUp) return;
       }
+      // Pointer-locked means the game owns the keyboard: no stray-focused
+      // widget may perform its default action. A focused <select> opens its
+      // native dropdown on Space (and arrows change it) — the dropdown is
+      // browser UI, which yanks pointer lock and pops the cursor + menu
+      // mid-fight; Space on a focused button clicks it; Space scrolls.
+      // Browser shortcuts (Ctrl/Meta/Alt, F-keys) stay reachable.
+      if (document.pointerLockElement === dom
+          && !e.ctrlKey && !e.metaKey && !e.altKey && !/^F\d{1,2}$/.test(e.code))
+        e.preventDefault();
       this.keys[e.code] = true;
       // TAB scoreboard works while dead too — the redeploy wait is exactly
       // when you want it. preventDefault keeps browser focus in the page.
