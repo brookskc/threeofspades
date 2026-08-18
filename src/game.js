@@ -572,6 +572,10 @@ export class Game {
       this.grenadeMeshes.push(m);
     }
     this.respawnTimers = new Map();
+    // Battlefield intel for the bots: every shot, kill and blast leaves a
+    // signed ping here, and deathmatch bots hunt the freshest enemy sign
+    // instead of camping a base the enemy already left.
+    this.intel = []; // { x, z, team, t }
     // Scoreboard: name -> { team, k, d }, seeded for every combatant so a
     // 0/0 soldier still shows up. Host broadcasts the table on each death;
     // clients replace their copy wholesale (names are unique enough keys).
@@ -619,6 +623,7 @@ export class Game {
     this.grenades = [];
     for (const m of this.grenadeMeshes) m.visible = false;
     this.respawnTimers.clear();
+    this.intel = []; // fresh map, no signs of anyone yet
     this.over = false;
     this._lastHealth = 100;
     this.kd = new Map(); // fresh round, fresh scoreboard
@@ -665,6 +670,27 @@ export class Game {
     if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'msg', text, color, team });
   }
   foesOf(team) { return this.entities().filter(e => e.team !== team); }
+
+  // --- bot intel ---
+  // Bots only run host/solo-side, so clients never bother recording.
+  pingIntel(pos, team) {
+    if (this.mode === 'client' || !team) return;
+    this.intel.push({ x: pos.x, z: pos.z, team, t: this.time });
+    if (this.intel.length > 48) this.intel.splice(0, this.intel.length - 48);
+  }
+  // Freshest enemy sign a hunter can walk toward; stale pings don't count.
+  huntSpot(team) {
+    for (let i = this.intel.length - 1; i >= 0; i--) {
+      const p = this.intel[i];
+      if (this.time - p.t <= 25 && p.team !== team) return p;
+    }
+    return null;
+  }
+  // A hunter reached a ping and found nothing: scratch enemy signs near it.
+  consumeIntel(team, spot, r) {
+    this.intel = this.intel.filter(p =>
+      p.team === team || Math.hypot(p.x - spot.x, p.z - spot.z) > r);
+  }
 
   // Pick a spawn just outside the base gate: never in water, never at the
   // bottom of a fresh crater, and as far from living enemies as the options
@@ -731,6 +757,7 @@ export class Game {
         : from.clone().addScaledVector(d, RANGE);
     const muzzle = from.clone().addScaledVector(d, 1.2).add(new THREE.Vector3(0, -0.12, 0));
     const hex = voxel ? PALETTE[this.world.get(voxel.x, voxel.y, voxel.z)].color : 0;
+    this.pingIntel(muzzle, shooter.team); // gunfire gives away your position
     this.shotFx(muzzle, end, !!hit, hex, from, spec.key);
 
     if (this.mode === 'host') {
@@ -861,6 +888,8 @@ export class Game {
     }
     if (killer && killer !== victim) this.feed(`${nameSpan(killer)} ⚔ ${nameSpan(victim)}`);
     else this.feed(`${nameSpan(victim)} blew up`);
+    // A corpse marks a fight: the fallen's teammates hunt toward it.
+    if (killer && killer !== victim) this.pingIntel(victim.body.pos, killer.team);
 
     // Scoreboard: a death for the fallen, a kill for the killer — suicides
     // and terrain score a death only, same as TDM team scoring below.
@@ -1090,6 +1119,7 @@ export class Game {
     const removed = this.world.carve(Math.floor(x), Math.floor(y), Math.floor(z), r);
     this.effects.blockBurst(removed);
     this.effects.addShake(Math.max(0, 0.5 - pos.distanceTo(this.player.body.pos) * 0.012));
+    this.pingIntel(pos, owner?.team); // explosions echo on the intel feed
     this._collapseFrom(removed, owner); // craters can drop whole structures
   }
 

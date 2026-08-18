@@ -1,13 +1,21 @@
-// bots.js — AI soldiers: they hunt the flag, fight back, and dig through walls.
+// bots.js — AI soldiers: they hunt intel (gunfire, sightings, kills), patrol
+// when the trail is cold, advance in lanes, group up past midfield, crouch-fire
+// at range, lob frags over cover, undermine towers, and dig through walls.
 import * as THREE from 'three';
 import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch } from './entities.js';
-import { SEA } from './world.js';
+import { SEA, SX, SZ, BLOCK } from './world.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
   green: ['Sarge', 'Pine', 'Moss', 'Flint', 'Clover', 'Briar'],
 };
 const GUN = { damage: 16, headMult: 1.5, interval: 0.14, spread: 0.035, mag: 24, reload: 2.0 };
+
+// Difficulty tiers scale reaction time, aim error and target memory.
+// ?botq=easy|hard skews the whole room; every bot still gets its own jitter.
+const QUERY = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
+const BOTQ = { easy: 0.65, normal: 1.0, hard: 1.35 };
+const BOT_SKILL = BOTQ[QUERY.get('botq')] ?? 1.0;
 
 let n = 0;        // name rotation
 let nextId = 0;   // stable identity for network snapshots
@@ -53,15 +61,88 @@ export class Bot {
     this.memoryT = 0;          // keeps tracking a target just out of sight
     this.responding = false;   // rushing to recover our dropped flag?
     this.deadT = -1;           // corpse tumble timer, while dead
+    this.skill = BOT_SKILL * (0.85 + Math.random() * 0.3); // individual jitter
+    this.lane = ((this.id % 3) - 1) * 18; // advance on a front, not a file
+    this.role = 'attack';      // ctf only: defend | mid | attack (recomputed)
+    this.patrol = null;        // current roam waypoint when there's no intel
+    this.patrolT = 0;
+    this.retreatT = 0;         // backing off to lick wounds
+    this.retreatCd = 0;
+    this.nades = 1;            // one frag per life
+    this.nadeT = 0;
+    this.crouched = false;     // mirrors the duck posture for fireHitscan
+  }
+
+  // Perpendicular offset so a team advances on a broad front instead of
+  // single file down the middle of the map.
+  _laned(pos) {
+    const v = pos.clone ? pos.clone() : new THREE.Vector3(pos.x, pos.y ?? 0, pos.z);
+    v.z += this.lane;
+    return v;
+  }
+
+  // Living non-carrier teammates sorted by id — stable ranks for roles.
+  _rank() {
+    const mates = this.game.bots
+      .filter(b => b.alive && b.team === this.team && !b.carrier)
+      .sort((a, b) => a.id - b.id);
+    return mates.indexOf(this);
+  }
+
+  // Deathmatch has no flag to chase, so hunt the freshest sign of the enemy
+  // (gunfire, kills, sightings — the game's intel feed). No intel? Roam.
+  _huntGoal() {
+    const g = this.game, b = this.body;
+    const spot = g.huntSpot(this.team);
+    if (spot) {
+      const d = Math.hypot(spot.x - b.pos.x, spot.z - b.pos.z);
+      // Stood on the spot and nobody's here — the trail is cold. Scratch it
+      // off for the whole team so nobody else camps an empty corner.
+      if (d < 9 && !this.target) { g.consumeIntel(this.team, spot, 16); return this._patrolGoal(); }
+      return this._laned(new THREE.Vector3(spot.x, g.world.surface(spot.x | 0, spot.z | 0), spot.z));
+    }
+    return this._patrolGoal();
+  }
+
+  // Roam the contested middle band, biased toward the enemy half — a patrol,
+  // not a camp. Fresh waypoint on arrival or on a timeout.
+  _patrolGoal() {
+    const b = this.body, w = this.game.world;
+    const arrived = this.patrol && Math.hypot(this.patrol.x - b.pos.x, this.patrol.z - b.pos.z) < 7;
+    if (!this.patrol || arrived || this.patrolT <= 0) {
+      this.patrolT = 18;
+      for (let tries = 0; tries < 8; tries++) {
+        const x = SX * 0.25 + Math.random() * SX * (this.heading > 0 ? 0.55 : 0.5);
+        const px = this.heading > 0 ? x : SX - x; // bias across midfield
+        const pz = SZ * 0.2 + Math.random() * SZ * 0.6;
+        if (w.surface(px | 0, pz | 0) < SEA) continue; // don't patrol the sea
+        this.patrol = new THREE.Vector3(px, w.surface(px | 0, pz | 0), pz);
+        break;
+      }
+      this.patrol ??= new THREE.Vector3(SX / 2, w.surface(SX / 2, SZ / 2), SZ / 2);
+    }
+    return this._laned(this.patrol);
+  }
+
+  // Team-colored masonry overhead is a structure somebody built — and the
+  // collapse system can drop it. Don't camp under what you can't vouch for.
+  _overhead() {
+    const w = this.game.world, b = this.body;
+    const fx = Math.floor(b.pos.x), fy = Math.floor(b.pos.y), fz = Math.floor(b.pos.z);
+    for (let dy = 3; dy <= 6; dy++) {
+      const v = w.get(fx, fy + dy, fz);
+      if (v === BLOCK.BLUE || v === BLOCK.GREEN) return true;
+    }
+    return false;
   }
 
   goal() {
     const g = this.game;
     this.responding = false;
     if (this.carrier) return g.standOf(this.team);                   // run it home
-    if (g.hill) return g.hill.pos;                                   // koth: take the point
+    if (g.hill) return g.hill.pos;   // koth: converge — the point is the point
     const own = g.flags?.[this.team];
-    if (!own) return g.standOf(g.enemyOf(this.team));                // deathmatch: hunt
+    if (!own) { this.role = 'attack'; return this._huntGoal(); }     // deathmatch: hunt
     // Flag defense: the two closest free bots drop everything — sprint at the
     // thief while it's carried, converge on the flag while it's on the ground.
     if (own.state === 'carried' && own.carrier) {
@@ -72,9 +153,16 @@ export class Bot {
       this.responding = this._isResponder(own.pos);
       if (this.responding) return own.pos;
     }
+    // Roles by stable rank: one guards the stand, one holds midfield, the
+    // rest attack. A team that all charges leaves its flag naked.
+    const rank = this._rank();
+    this.role = rank === 0 ? 'defend' : rank === 1 ? 'mid' : 'attack';
+    if (this.role === 'defend') return this._laned(g.standOf(this.team));
+    if (this.role === 'mid')
+      return this._laned(new THREE.Vector3(SX / 2, g.world.surface(SX / 2, SZ / 2), SZ / 2));
     const enemyFlag = g.flags[g.enemyOf(this.team)];
     if (enemyFlag.state === 'dropped') return enemyFlag.pos;         // grab the loose flag
-    return g.standOf(g.enemyOf(this.team));                          // storm their base
+    return this._laned(g.standOf(g.enemyOf(this.team)));             // storm their base
   }
 
   // Am I one of the two closest living, non-carrying teammates to the spot?
@@ -99,13 +187,19 @@ export class Bot {
     // --- pick something to shoot (it has to actually see it first) ---
     const seen = this._acquire();
     if (seen !== this.target) this.aimT = 0;    // fresh eyes: reaction time
-    if (seen) { this.target = seen; this.memoryT = 1.2; }
+    if (seen) {
+      // New eyes on an enemy: report it. Teammates hunt from these sightings.
+      if (seen !== this.target) g.pingIntel(seen.body.pos, seen.team);
+      this.target = seen; this.memoryT = 1.2 * this.skill;
+    }
     else if ((this.memoryT -= dt) <= 0) this.target = null;
     if (this.target) this.aimT += dt;
+    const reactT = 0.35 / this.skill; // better bots shoulder faster
 
     // --- movement ---
     const goal = this.goal();
     this.wanderT -= dt;
+    this.patrolT -= dt; // patrol waypoints go stale even if never reached
     if (this.wanderT <= 0) {
       this.wanderT = 1.5 + Math.random() * 2;
       this.wander.set((Math.random() - .5) * 8, 0, (Math.random() - .5) * 8);
@@ -159,13 +253,39 @@ export class Bot {
     const dist = dir.length();
     if (dist > 1.2) dir.normalize();
 
-    // Combat strafe when engaged up close — but not in water, where the
-    // sideways mix orbits the bot off its committed exit wall.
-    let toFoe = null;
-    if (this.target && this.aimT > 0.3 && !b.inWater) {
-      toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
-      const side = new THREE.Vector3(-toFoe.z, 0, toFoe.x).multiplyScalar(Math.sin(g.time * 1.7 + this.name.length) > 0 ? 1 : -1);
-      dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
+    // Combat movement when engaged: strafe up close, hold and crouch-fire
+    // at range — but never in water, where the sideways mix orbits the bot
+    // off its committed exit wall.
+    let toFoe = null, foeD = Infinity, undermining = false;
+    if (this.target && !b.inWater) {
+      foeD = b.pos.distanceTo(this.target.body.pos);
+      // Undermine: a foe we merely REMEMBER (memoryT keeps the trail) is up
+      // a tower we can't see through — walk to the column and let the shovel
+      // and gravity argue with his footing. No aim required: the head never
+      // settles on a target it can't see, so gating on aimT would forbid this.
+      if (!g.losClear(b.eye(), this.target.body.eye()) &&
+          this.target.body.pos.y > b.pos.y + 3 && foeD < 14) {
+        undermining = true;
+        dir.subVectors(this.target.body.pos, b.pos).setY(0).normalize();
+      } else if (this.aimT > 0.3) {
+        toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
+        if (foeD < 14) {
+          const side = new THREE.Vector3(-toFoe.z, 0, toFoe.x).multiplyScalar(Math.sin(g.time * 1.7 + this.name.length) > 0 ? 1 : -1);
+          dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
+        }
+      }
+    }
+
+    // Wounded and engaged: fall back toward home for a beat (still shooting),
+    // throwing a wall up behind us if there's cover to make. Then re-engage.
+    this.retreatT -= dt; this.retreatCd -= dt;
+    if (this.target && this.health < 35 && this.retreatCd <= 0 && toFoe) {
+      this.retreatT = 2.5; this.retreatCd = 9;
+    }
+    if (this.retreatT > 0 && toFoe) {
+      dir.set(-toFoe.x - this.heading * 0.5, 0, -toFoe.z).normalize();
+      if (b.onGround && this.blocks >= 3 && this.buildT <= 0 && !this._hasCover(toFoe))
+        this._build(toFoe);
     }
 
     // --- combat engineering: caught in the open at range, throw up a
@@ -174,11 +294,26 @@ export class Bot {
     if (this.target && !this.carrier && !this.responding && toFoe &&
         b.onGround && !b.inWater && this.blocks >= 3 && this.buildT <= 0 &&
         this.coverT <= 0) {
-      const foeD = b.pos.distanceTo(this.target.body.pos);
       if (foeD > 8 && foeD < 42 && !this._hasCover(toFoe)) this._build(toFoe);
     }
-    // Behind fresh cover: hold the line instead of advancing.
-    if (this.coverT > 0 && this.target) dir.multiplyScalar(0.15);
+    // A defender with quiet hands fortifies: wall off the enemy approach to
+    // the flag stand, one knee wall at a time.
+    else if (this.role === 'defend' && !this.target && this.blocks >= 6 &&
+        this.buildT <= 0 && b.onGround && !b.inWater) {
+      if (b.pos.distanceTo(g.standOf(this.team)) < 12) {
+        this._build(new THREE.Vector3(this.heading, 0, 0));
+        this.coverT = 0; // fortifying, not fighting — keep patrolling
+      }
+    }
+    // Behind fresh cover: hold the line instead of advancing — unless there's
+    // team-colored masonry overhead, which the collapse system can drop on us.
+    // A retreating bot never holds: the wall it just threw up is for falling
+    // back BEHIND, not for standing next to.
+    if (this.coverT > 0 && this.target && this.retreatT <= 0 && !this._overhead())
+      dir.multiplyScalar(0.15);
+    // Holding a ranged firing line: plant the feet while crouch-firing.
+    if (this.target && foeD > 18 && this.aimT > reactT && this.coverT <= 0 &&
+        !undermining && b.onGround && !b.inWater) dir.multiplyScalar(0.15);
 
     // --- terrain negotiation: tunnel level, stair-step uphill, hop steps ---
     // The passage ahead is two voxels high at foot level; whatever of it is
@@ -211,8 +346,10 @@ export class Bot {
     // A bot wedged against terrain digs even mid-fight (stuck >= 1): trading
     // fire while pressed into a bank it could shovel through is the worse
     // look — combat only pauses digging on open ground.
-    if ((!this.target || b.inWater || this.stuck >= 1)
-        && (dist > 2 || b.inWater || this.exit)
+    // Undermining counts as wedged-in work: shoveling out a tower's legs is
+    // worth pausing fire for, same as climbing a bank.
+    if ((!this.target || b.inWater || this.stuck >= 1 || undermining)
+        && (dist > 2 || b.inWater || this.exit || undermining)
         && this.digT <= 0 && (lo || hi) && (b.onGround || b.inWater)) {
       this.digT = 0.32;
       this.lastDig = g.time;
@@ -253,14 +390,28 @@ export class Bot {
     }
     const bridging = g.time - this.lastBridge < 0.9;
 
+    // Group up: past midfield with no teammate in sight is how lone bots get
+    // picked off. Creep cautiously until the team catches up. Defenders and
+    // responders answer to their own urgency, not this rule.
+    let cautious = false;
+    if (!this.target && !this.carrier && !this.responding && this.role !== 'defend' && !b.inWater) {
+      const over = this.heading > 0 ? b.pos.x > SX / 2 : b.pos.x < SX / 2;
+      if (over) {
+        cautious = true;
+        for (const m of g.entities())
+          if (m !== this && m.alive && m.team === this.team &&
+              m.body.pos.distanceTo(b.pos) < 18) { cautious = false; break; }
+      }
+    }
+
     // Digging pace applies in water too: at full swim speed a bot outswims
     // its own shovel cadence (~1 block per swing) and never sits at a bank
     // face long enough to clear the ledge — the creek-bobbing loop.
-    const speed = b.inWater ? (digging ? 1.4 : 3.2)
+    const speed = (b.inWater ? (digging ? 1.4 : 3.2)
       : this.target ? 3.4
       : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
       : this.responding ? 5.8      // urgency: our flag is on the ground
-      : 4.6;
+      : 4.6) * (cautious ? 0.45 : 1);
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
 
@@ -293,18 +444,42 @@ export class Bot {
     b.move(dt);
 
     // Cover posture: duck while reloading behind the wall or riding out a
-    // burst pause; stand to shoot. Same bounded lerp as the player crouch.
+    // burst pause; stand to shoot. At range a bot crouch-fires for the
+    // steadier spread — same trade the player's crouch makes. Same bounded
+    // lerp as the player crouch.
     if (this.reloading > 0 && this.coverT > 0) this.duckT = Math.max(this.duckT, 0.2);
-    const ducking = this.duckT > 0;
+    let rangeDuck = this.target && foeD > 18 && this.aimT > reactT && b.onGround && !b.inWater;
+    if (rangeDuck) {
+      // Don't duck blind behind our own knee wall: if the crouched eye can't
+      // see the foe but the standing eye can, stand and shoot over it.
+      const duckEye = new THREE.Vector3(b.pos.x, b.pos.y + 0.97, b.pos.z);
+      const standEye = new THREE.Vector3(b.pos.x, b.pos.y + 1.57, b.pos.z);
+      if (!g.losClear(duckEye, this.target.body.eye()) &&
+          g.losClear(standEye, this.target.body.eye())) rangeDuck = false;
+    }
+    const ducking = this.duckT > 0 || rangeDuck;
     b.half.h += ((ducking ? 1.15 : 1.75) - b.half.h) * Math.min(1, dt * 10);
+    this.crouched = ducking; // fireHitscan reads this for the spread bonus
     setCrouch(this.parts, ducking);
+
+    // --- grenades: one frag per life, lobbed over the knee walls foes
+    // duck behind. Arc up a touch so it clears cover and lands at feet. ---
+    this.nadeT -= dt;
+    if (this.target && this.nades > 0 && this.nadeT <= 0 && !b.inWater &&
+        foeD > 10 && foeD < 28 && Math.random() < dt * 0.25 &&
+        g.losClear(b.eye(), this.target.body.eye())) {
+      const lob = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).normalize();
+      lob.y += 0.45; lob.normalize();
+      this.nades--; this.nadeT = 7;
+      g.throwGrenade(this, b.eye(), lob, 11 + foeD * 0.15);
+    }
 
     // --- shooting ---
     this.cooldown -= dt;
     if (this.reloading > 0) {
       this.reloading -= dt;
       if (this.reloading <= 0) this.ammo = GUN.mag;
-    } else if (this.target && this.aimT > 0.35 && this.cooldown <= 0) {
+    } else if (this.target && this.aimT > reactT && this.cooldown <= 0) {
       if (this.ammo <= 0) { this.reloading = GUN.reload; }
       else {
         const from = b.eye();
@@ -316,7 +491,7 @@ export class Bot {
           const burstPause = Math.random() < 0.25;
           this.cooldown = GUN.interval * (burstPause ? 4 : 1); // burst rhythm
           if (burstPause && this.coverT > 0) this.duckT = this.cooldown + 0.15;
-          const err = Math.max(0.015, 0.2 - this.aimT * 0.16);
+          const err = Math.max(0.015, (0.2 - this.aimT * 0.16) / this.skill);
           const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
           aim.x += (Math.random() - .5) * err * 2;
           aim.y += (Math.random() - .5) * err;
@@ -426,6 +601,13 @@ export class Bot {
     this.buildT = 0;
     this.coverT = 0;
     this.duckT = 0;
+    this.patrol = null;
+    this.patrolT = 0;
+    this.retreatT = 0;
+    this.retreatCd = 0;
+    this.nades = 1;
+    this.nadeT = 0;
+    this.crouched = false;
     this.body.half.h = 1.75;
     this.target = null;
     this.aimT = 0;

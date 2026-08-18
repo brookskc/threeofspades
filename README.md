@@ -191,14 +191,35 @@ into vertex colors. Hitscan weapons and block picking use DDA raycasting.
 All audio is synthesized live with WebAudio: gunfire, digs, explosions, the
 capture jingle. The repo contains zero binary assets besides screenshots.
 
-Bots (`src/bots.js`) run a small sense-decide-act loop: acquire targets with
-line-of-sight checks, strafe while firing, path toward flags, and shovel
-through obstacles when stuck. Swimming counts, so a bot that falls in the
-Pinefall creek digs the bank into a staircase and climbs out, overhangs
-included. But they'd rather not get their feet wet: a bot whose path ends at a
-ravine rim lays a plank bridge ahead of itself and walks across at shovel pace.
-Bots caught in the open at rifle range throw up a three-wide knee wall, then
-fight from behind it, standing to fire, ducking to reload.
+Bots (`src/bots.js`) run a small sense-decide-act loop over a shared intel
+feed: every gunshot, kill, blast and fresh sighting leaves a signed ping on the
+map, and in deathmatch — where there's no flag to chase — bots hunt the
+freshest enemy sign instead of camping a base the enemy already left. A bot
+that walks to a cold trail scratches it off for the whole team and falls back
+to patrolling the contested middle band, so nobody garrisons an empty corner.
+Teams advance on a broad front (each bot keeps a lane), creep cautiously when
+caught past midfield alone, and in CTF sort themselves into roles by stable
+rank: one guards the stand (and walls off the enemy approach with spare
+blocks), one holds midfield, the rest attack — until the flag moves, at which
+point the two closest responders drop everything, as before.
+
+In a fight they use the terrain kit like players do: strafe up close,
+crouch-fire at range for the steadier spread, lob their one frag per life over
+the knee wall a foe is hiding behind, and fall back toward home — building a
+wall as they go — when wounded. A bot that loses sight of a foe on a tower
+walks to the column and shovels the legs out from under him (gravity keeps
+score), and none will camp under team-colored masonry, because they know what
+the collapse system does to it. Reaction time, aim error and target memory all
+scale with a per-bot skill roll; `?botq=easy|hard` skews the whole room.
+
+Underneath it all is the same sense-decide-act loop: acquire targets with
+line-of-sight checks, path toward objectives, and shovel through obstacles
+when stuck. Swimming counts, so a bot that falls in the Pinefall creek digs
+the bank into a staircase and climbs out, overhangs included. But they'd
+rather not get their feet wet: a bot whose path ends at a ravine rim lays a
+plank bridge ahead of itself and walks across at shovel pace. Bots caught in
+the open at rifle range throw up a three-wide knee wall, then fight from
+behind it, standing to fire, ducking to reload.
 
 Multiplayer (`src/net.js`) wraps PeerJS in a host-authoritative star: clients
 send inputs and actions, the host simulates, and everyone renders snapshots
