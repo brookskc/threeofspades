@@ -58,7 +58,15 @@ export class Player {
   // ---------------- input ----------------
   _bind(dom) {
     addEventListener('keydown', e => {
-      if (e.repeat || e.target.tagName === 'INPUT') return;
+      if (e.repeat) return;
+      // Typing beats game keys — but only where typing makes sense: the
+      // chat box, or a lobby input while the menu is actually up. The menu
+      // fades out with opacity (still laid out), so a callsign box left
+      // focused after deploy would otherwise keep eating WASD mid-match.
+      if (e.target.tagName === 'INPUT') {
+        const menuUp = !document.getElementById('menu').classList.contains('hidden');
+        if (e.target.id === 'chatin' || menuUp) return;
+      }
       this.keys[e.code] = true;
       // TAB scoreboard works while dead too — the redeploy wait is exactly
       // when you want it. preventDefault keeps browser focus in the page.

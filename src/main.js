@@ -97,6 +97,11 @@ let sessionLive = false; // a match was entered: pause shows the slim screen
 function setPlaying(v) {
   playing = v;
   if (v) sessionLive = true;
+  // Dropping in with the callsign box still focused (a click on a
+  // non-focusable lobby link doesn't blur it in every browser) leaves the
+  // hidden input eating every WASD press — a frozen soldier with a working
+  // mouse. Entering play always drops stray focus.
+  if (v) document.activeElement?.blur?.();
   $('menu').classList.toggle('hidden', v);
   // In-session menu (Esc pause / rotation break / a lost pointer lock) is a
   // different screen from the home lobby: no callsign, no map selector, no
