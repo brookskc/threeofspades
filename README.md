@@ -163,7 +163,8 @@ climb — crouching skips the auto-step unless you hold `SHIFT` to clamber)
 — and crouch *while sprinting* to slide: a fast, low, barely-steerable skid
 that jump pops you out of.
 · `LMB` fire/dig/place/throw · `RMB` aim · `1-5` / `Q`·`E` select tool (the
-grenade is slot 5, three per life, one trickles back every 12 s) · `R` reload ·
+grenade is slot 5, three per life, one trickles back every 12 s — throw
+all three and your hand comes up empty until one does) · `R` reload ·
 `TAB` scoreboard · `T` / `Y` chat the room / your team · `Esc` pause (in a
 match: resume or back to the main menu). Kills and deaths are tracked all
 round — hold `TAB` for the live table, and the end screen closes every match

@@ -121,6 +121,7 @@ export class Player {
     this.recoil = Math.min(1, this.recoil + 0.35);   // little throwing-arm kick
     sfx.throw_();
     this.game.requestNade(this);
+    this._syncViewmodel(); // the last one leaves an empty hand
     this.game.hud.refreshTool(this);
   }
 
@@ -189,6 +190,11 @@ export class Player {
     mk(0.05, 0.1, 0.06, skin, 0, -0.1, -0.22, nade);     // hand
     this.vm.nade = nade;
 
+    // All three thrown: the hand stays up, but it's holding nothing.
+    const empty = new THREE.Group();
+    mk(0.05, 0.1, 0.06, skin, 0, -0.1, -0.22, empty);    // empty hand
+    this.vm.empty = empty;
+
     for (const k in this.vm) root.add(this.vm[k]);
     this.vmRoot.position.set(0.28, -0.26, -0.25);
     this._syncViewmodel();
@@ -196,7 +202,9 @@ export class Player {
 
   _syncViewmodel() {
     for (const k in this.vm) this.vm[k].visible = false;
-    this.vm[TOOLS[this.tool].key].visible = true;
+    const key = TOOLS[this.tool].key;
+    // Dry on frags? Show the empty hand, not a phantom grenade.
+    this.vm[key === 'nade' && this.grenades <= 0 ? 'empty' : key].visible = true;
   }
 
   // ---------------- per-frame ----------------
@@ -322,7 +330,8 @@ export class Player {
     // Grenade trickle-back.
     if (this.grenades < 3) {
       this.grenadeRegen += dt;
-      if (this.grenadeRegen > 12) { this.grenadeRegen = 0; this.grenades++; this.game.hud.refreshTool(this); }
+      if (this.grenadeRegen > 12) { this.grenadeRegen = 0; this.grenades++;
+        this._syncViewmodel(); this.game.hud.refreshTool(this); }
     }
   }
 
@@ -389,6 +398,7 @@ export class Player {
     this.crouched = false;
     this.body.half.h = 1.75;
     this.vmRoot.visible = true;
+    this._syncViewmodel(); // full belt: the hand holds a frag again
     sfx.respawn();
   }
 }
