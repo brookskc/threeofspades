@@ -1,14 +1,18 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
-import { makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch } from './entities.js';
+import { makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch, placeShadow } from './entities.js';
 import { sfx } from './audio.js';
 
 export class Avatar {
-  constructor(parent, team, name) {
+  constructor(parent, team, name, friendly = false) {
     this.team = team;
     this.parts = makeSoldier(team === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
     this.group = this.parts.group;
-    this.group.add(makeNametag(name, team));
+    // Callsigns are for your own side. An enemy tag floats at y=2.15, above
+    // the helmet — so a man crouched behind a two-block wall was fully hidden
+    // while his name sat over the parapet. Finding the enemy is supposed to
+    // be something you do with your eyes.
+    if (friendly) this.group.add(makeNametag(name, team));
     parent.add(this.group);
     this.group.visible = false; // until the first update() places us
     this.samples = []; // [receiptTime, x, y, z, yaw]
@@ -64,7 +68,7 @@ export class Avatar {
   // Render just far enough in the past to bracket two snapshots: one
   // observed interval plus two jitter sigmas, clamped to sanity. A clean
   // 15Hz link lands near 80ms; the old fixed 130ms assumed the worst.
-  update(gameT) {
+  update(gameT, world = null) {
     const now = performance.now() / 1000;
     const delay = Math.min(0.22, Math.max(0.06,
       1.15 * (this.interval || 0.083) + 2 * (this.jitter ?? 0)));
@@ -106,6 +110,7 @@ export class Avatar {
     this.group.rotation.y = a[4] + dry * k;
     animateSoldier(this.parts, speed, gameT + this.pos.x);
     setCrouch(this.parts, this.crouch);
+    if (world) placeShadow(this.parts, world, this.group.rotation.y);
   }
 
   dispose() { disposeObject(this.group); }

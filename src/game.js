@@ -78,20 +78,30 @@ class Flag {
     this.carrier = null;
     this.dropTimer = 0;
 
+    // Built from boxes like everything else. The old flag was the only
+    // cylinder in the game and the only double-sided plane, with its cloth
+    // rippled by writing vertex positions every frame — a smooth, soft object
+    // standing in a world of hard axis-aligned voxels. It read as borrowed
+    // from a different game, because it was.
     const color = team === 'blue' ? 0x4a6cd4 : 0x4a9e4a;
     this.group = new THREE.Group();
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.05, 2.4),
-      new THREE.MeshBasicMaterial({ color: 0xcccccc })
-    );
-    pole.position.y = 1.2;
-    this.group.add(pole);
-    this.cloth = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.15, 0.7, 8, 3),
-      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide })
-    );
-    this.cloth.position.set(0.62, 1.95, 0);
-    this.group.add(this.cloth);
+    const box = (w, h, d, mat, x, y, z, parent) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      parent.add(m);
+      return m;
+    };
+    const poleMat = new THREE.MeshBasicMaterial({ color: 0x8a8d94 });   // stone grey
+    const clothMat = new THREE.MeshBasicMaterial({ color });
+    box(0.14, 2.4, 0.14, poleMat, 0, 1.2, 0, this.group);
+    box(0.26, 0.14, 0.26, poleMat, 0, 2.42, 0, this.group);             // finial
+    // Swallowtail banner: three boxes, notch cut from the fly edge.
+    this.banner = new THREE.Group();
+    this.banner.position.set(0.07, 1.98, 0);
+    box(0.62, 0.78, 0.09, clothMat, 0.31, 0, 0, this.banner);           // hoist half
+    box(0.36, 0.26, 0.09, clothMat, 0.80, 0.26, 0, this.banner);        // upper tail
+    box(0.36, 0.26, 0.09, clothMat, 0.80, -0.26, 0, this.banner);       // lower tail
+    this.group.add(this.banner);
     game.scene.add(this.group);
   }
 
@@ -129,13 +139,12 @@ class Flag {
   // Visuals only — clients set pos/state from snapshots and call this.
   clientUpdate(t) {
     this.group.position.copy(this.pos);
-    // Gentle cloth ripple.
-    const p = this.cloth.geometry.attributes.position;
-    for (let i = 0; i < p.count; i++) {
-      const x = p.getX(i);
-      p.setZ(i, Math.sin(t * 5 + x * 4) * 0.07 * (x + 0.6));
-    }
-    p.needsUpdate = true;
+    // Quantized sway instead of a per-frame vertex ripple: the banner steps
+    // between five poses rather than flowing between them. Cheaper, and it
+    // matches a world where nothing else moves smoothly.
+    const step = Math.round(Math.sin(t * 2.2) * 2) / 2;  // -1, -0.5, 0, 0.5, 1
+    this.banner.rotation.y = step * 0.17;
+    this.banner.position.z = step * 0.04;
   }
 }
 
@@ -523,7 +532,7 @@ class RemoteProxy {
     this.nades = 3;            // host-enforced grenade stock (mirrors Player)
     this.nadeRegen = 0;
     this._actT = {};           // per-action rate gates (host enforces, not trusts)
-    this.avatar = new Avatar(game.scene, team, name);
+    this.avatar = new Avatar(game.scene, team, name, team === game.player.team);
     this.avatar.push(p.x, p.y, p.z, 0);
   }
   die(killer) {
@@ -596,7 +605,7 @@ export class Game {
     this.grenades = [];
     // A pool, not one shared mesh: several grenades can be airborne at once
     // (two bots + a player), and a single mesh rendered only grenades[0].
-    const nadeGeo = new THREE.SphereGeometry(0.14, 10, 8);
+    const nadeGeo = new THREE.BoxGeometry(0.17, 0.17, 0.17); // boxes, like everything else
     const nadeMat = new THREE.MeshBasicMaterial({ color: 0x2e3b2e });
     this.grenadeMeshes = [];
     for (let i = 0; i < 16; i++) {
@@ -1751,7 +1760,10 @@ export class Game {
       const key = 'p' + idx;
       want.add(key);
       let av = this.avatars.get(key);
-      if (!av) { av = new Avatar(this.scene, meta.team, meta.name); this.avatars.set(key, av); }
+      if (!av) {
+        av = new Avatar(this.scene, meta.team, meta.name, meta.team === this.player.team);
+        this.avatars.set(key, av);
+      }
       av.setAlive(!!alive);
       av.setCrouch(!!crouch);
       av.push(x, y, z, ry);
@@ -1763,7 +1775,10 @@ export class Game {
       const key = 'b' + idx;
       want.add(key);
       let av = this.avatars.get(key);
-      if (!av) { av = new Avatar(this.scene, meta.team, meta.name); this.avatars.set(key, av); }
+      if (!av) {
+        av = new Avatar(this.scene, meta.team, meta.name, meta.team === this.player.team);
+        this.avatars.set(key, av);
+      }
       av.setAlive(!!alive);
       av.setCrouch(!!crouch); // host shrinks ducking bots; draw them that way
       av.push(x, y, z, ry);
@@ -1904,7 +1919,7 @@ export class Game {
     }
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
-    for (const av of this.avatars.values()) av.update(this.time);
+    for (const av of this.avatars.values()) av.update(this.time, this.world);
     this._sendT -= dt;
     if (this._sendT <= 0 && this.net) {
       this._sendT = 1 / 30; // 33ms input age — the uplink is tiny, spend it

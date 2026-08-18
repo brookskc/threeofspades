@@ -2,7 +2,7 @@
 // when the trail is cold, advance in lanes, group up past midfield, crouch-fire
 // at range, lob frags over cover, undermine towers, and dig through walls.
 import * as THREE from 'three';
-import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch } from './entities.js';
+import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch, placeShadow } from './entities.js';
 import { SEA, SX, SZ, BLOCK } from './world.js';
 
 const NAMES = {
@@ -34,7 +34,9 @@ export class Bot {
     const p = game.spawnPoint(team);
     this.body = new Body(game.world, p.x, p.y, p.z);
     this.parts = makeSoldier(team === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
-    this.parts.group.add(makeNametag(this.name, team)); // know your enemy
+    // Callsigns for your own side only — an enemy tag rides above the helmet
+    // and gives away a man who is otherwise fully behind cover.
+    if (team === game.player?.team) this.parts.group.add(makeNametag(this.name, team));
     game.scene.add(this.parts.group);
     this.health = 100;
     this.alive = true;
@@ -555,6 +557,7 @@ export class Bot {
       if (ang > 1e-3) this.face.lerp(want, Math.min(1, 7 * dt / ang)).normalize();
     }
     pg.rotation.y = Math.atan2(-this.face.x, -this.face.z);
+    placeShadow(this.parts, g.world, pg.rotation.y);
     // Tool in hand matches the work: spade out while the shovel is swinging.
     const shoveling = g.time - this.lastDig < 0.9;
     this.parts.gun.visible = !shoveling;

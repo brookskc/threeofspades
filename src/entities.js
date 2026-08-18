@@ -113,30 +113,53 @@ export class Body {
 }
 
 // A blocky AoS-style soldier: legs, torso, arms, head, gun — team colored.
-// Soft blob shadow shared by every soldier — a radial-gradient quad at the
-// feet. Grounds the model for two triangles. Shared resources are tagged so
-// disposeObject leaves them alone.
-let blobGeo = null, blobMat = null;
+// Ground shadow: one flat, hard-edged quad per soldier. It used to be a
+// radial-gradient sprite parented at the feet, which was wrong twice over —
+// nothing else in this game has a soft edge, and riding the model meant the
+// shadow JUMPED with the player instead of staying on the ground. Now it is
+// projected down onto whatever the soldier is actually standing over, which
+// makes it a real read on where an airborne enemy is about to land.
+// Shared resources are tagged so disposeObject leaves them alone.
+export const SHADOW_MAX_DROP = 12; // beyond this, nothing to cast onto
+// Four shared materials instead of a clone per soldier: the fade steps
+// between fixed levels the same way the banner sways between fixed poses,
+// and nothing here needs disposing when a soldier does.
+const SHADOW_ALPHA = [0.28, 0.20, 0.13, 0.07];
+let blobGeo = null, blobMats = null;
 function blobShadow() {
   if (!blobGeo) {
-    const c = document.createElement('canvas');
-    c.width = c.height = 64;
-    const g2 = c.getContext('2d');
-    const rg = g2.createRadialGradient(32, 32, 4, 32, 32, 30);
-    rg.addColorStop(0, 'rgba(0,0,0,.42)');
-    rg.addColorStop(1, 'rgba(0,0,0,0)');
-    g2.fillStyle = rg;
-    g2.fillRect(0, 0, 64, 64);
-    blobGeo = new THREE.PlaneGeometry(1.2, 1.2);
-    blobMat = new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false,
-    });
+    blobGeo = new THREE.PlaneGeometry(0.95, 0.95);
+    blobMats = SHADOW_ALPHA.map(opacity => new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity, depthWrite: false,
+    }));
   }
-  const m = new THREE.Mesh(blobGeo, blobMat);
-  m.userData.shared = true;
+  const m = new THREE.Mesh(blobGeo, blobMats[0]);
+  m.userData.shared = true; // geometry and materials outlive any one soldier
   m.rotation.x = -Math.PI / 2;
-  m.position.y = 0.035;
   return m;
+}
+
+// Drop the shadow onto the ground under a soldier and fade it with height.
+// Call once per frame after the group has been positioned. `yaw` is the
+// group's rotation.y — countered here so a square shadow does not spin as
+// its owner turns (the old round one hid that; a hard-edged one cannot).
+export function placeShadow(parts, world, yaw = 0) {
+  const b = parts.blob;
+  if (!b) return;
+  const g = parts.group;
+  const x = Math.floor(g.position.x), z = Math.floor(g.position.z);
+  const foot = Math.floor(g.position.y);
+  let top = -1;
+  for (let y = foot; y >= foot - SHADOW_MAX_DROP; y--)
+    if (world.solid(x, y, z)) { top = y + 1; break; }
+  if (top < 0) { b.visible = false; return; } // over a void or deep water
+  const drop = g.position.y - top;
+  b.visible = true;
+  b.position.y = top + 0.02 - g.position.y;   // group-local: land on the ground
+  b.rotation.z = -yaw;                        // stay world-aligned
+  const t = Math.min(1, Math.max(0, drop / SHADOW_MAX_DROP));
+  b.scale.setScalar(1 - t * 0.45);            // smaller the higher you are
+  b.material = blobMats[Math.min(SHADOW_ALPHA.length - 1, Math.floor(t * SHADOW_ALPHA.length))];
 }
 
 export function makeSoldier(teamColor) {
