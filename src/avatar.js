@@ -21,10 +21,21 @@ export class Avatar {
 
   // ry is model-space rotation.y (soldier forward is -Z).
   push(x, y, z, ry) {
+    // Measure the arrival process: EWMA of the gap between snapshots and of
+    // its jitter. The render delay below is derived from this, so a clean
+    // link gets a small buffer and a jittery one gets what it needs — nothing
+    // on the wire, nothing advertised by the host.
+    const now = performance.now() / 1000;
+    if (this.lastArrival) {
+      const gap = now - this.lastArrival;
+      this.interval = this.interval ? this.interval + 0.1 * (gap - this.interval) : gap;
+      this.jitter = (this.jitter ?? 0) + 0.1 * (Math.abs(gap - this.interval) - (this.jitter ?? 0));
+    }
+    this.lastArrival = now;
     const s = this.samples, last = s[s.length - 1];
     // Teleports (respawn, lag stall) snap instead of gliding from the old spot.
     if (last && Math.hypot(x - last[1], y - last[2], z - last[3]) > 8) s.length = 0;
-    s.push([performance.now() / 1000, x, y, z, ry]);
+    s.push([now, x, y, z, ry]);
     if (s.length > 12) s.shift();
   }
 
@@ -39,6 +50,7 @@ export class Avatar {
     this.alive = alive;
     if (alive) {
       this.samples.length = 0;
+      this.lastArrival = null; this.interval = 0; this.jitter = 0; // fresh stats
       this.deadAt = null;
       this.group.visible = false;
       resetDeath(this.parts);
@@ -49,9 +61,14 @@ export class Avatar {
 
   setCrouch(on) { this.crouch = on; }
 
-  // Render ~130ms in the past, interpolating between bracketing snapshots.
+  // Render just far enough in the past to bracket two snapshots: one
+  // observed interval plus two jitter sigmas, clamped to sanity. A clean
+  // 15Hz link lands near 80ms; the old fixed 130ms assumed the worst.
   update(gameT) {
-    const rt = performance.now() / 1000 - 0.13;
+    const now = performance.now() / 1000;
+    const delay = Math.min(0.22, Math.max(0.06,
+      1.15 * (this.interval || 0.083) + 2 * (this.jitter ?? 0)));
+    const rt = now - delay;
     const s = this.samples;
     if (!s.length) { this.group.visible = false; return; } // nothing valid to show
     let a = s[0], b = s[s.length - 1];
@@ -66,7 +83,11 @@ export class Avatar {
     let dry = b[4] - a[4];
     if (dry > Math.PI) dry -= Math.PI * 2;
     if (dry < -Math.PI) dry += Math.PI * 2;
-    const speed = this.pos.distanceTo(new THREE.Vector3(nx, ny, nz)) * 10;
+    // Walk-cycle speed from real velocity: per-frame displacement divided by
+    // the actual frame delta, so high-refresh displays don't slow the gait.
+    const fdt = this._lastUpd ? Math.max(1e-3, now - this._lastUpd) : 1 / 60;
+    this._lastUpd = now;
+    const speed = this.pos.distanceTo(new THREE.Vector3(nx, ny, nz)) / fdt;
     this.pos.set(nx, ny, nz);
     this.group.position.copy(this.pos);
     // Footsteps off the interpolated ground truth: 2.2 blocks of travel, one

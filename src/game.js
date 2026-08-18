@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { VoxelWorld, SEA, SX, SY, SZ, BLOCK, PALETTE } from './world.js';
 import { generateMap, BASE, MAPS, mapsForMode } from './mapgen.js';
 import { Player, TOOLS } from './player.js';
-import { Bot } from './bots.js';
+import { Bot, reserveBotId } from './bots.js';
 import { Effects } from './effects.js';
 import { sfx, setListener } from './audio.js';
 import { Body, disposeObject } from './entities.js';
@@ -38,6 +38,33 @@ const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
 const finite3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
 const arr = v => [v.x, v.y, v.z];
 const FLAG_CODE = { home: 0, carried: 1, dropped: 2 };
+
+// ---- wire quantization -------------------------------------------------
+// Positions ride the snapshot as fixed-point ints: 1/256 of a block for x
+// and z, 1/512 for y (jumps and slabs want the extra bit). Yaw is a 16-bit
+// turn fraction. Decoded angles land back in atan2's (-pi, pi] so avatar
+// interpolation never sees a 0/2pi wrap.
+export const qx = v => Math.round(v * 256);
+export const qy = v => Math.round(v * 512);
+export const qa = a => Math.round(a / (2 * Math.PI) * 65536) & 0xFFFF;
+const dx = v => v / 256, dy = v => v / 512;
+const da = v => { const a = v / 65536 * 2 * Math.PI; return a > Math.PI ? a - 2 * Math.PI : a; };
+const rowsEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Merge one (partial) snapshot into the reconstructed full-state maps. The
+// host omits unchanged rows, so these maps — not the last packet — are the
+// world as the host sees it, and the replica a promoted client rebuilds
+// from. Decoded row shapes:
+//   player: [x, y, z, ry, hp, alive, carrier, tool, blocks, crouch]
+//   bot:    [x, y, z, ry, hp, alive, carrier, crouch]
+export function mergeSnapshot(fullP, fullB, d) {
+  for (const r of d.p ?? [])
+    fullP.set(r[0], [dx(r[1]), dy(r[2]), dx(r[3]), da(r[4]), r[5], r[6], r[7], r[8], r[9], r[10]]);
+  for (const r of d.b ?? [])
+    fullB.set(r[0], [dx(r[1]), dy(r[2]), dx(r[3]), da(r[4]), r[5], r[6], r[7], r[8]]);
+  for (const i of d.rm?.p ?? []) fullP.delete(i);
+  for (const i of d.rm?.b ?? []) fullB.delete(i);
+}
 
 // ---------------------------------------------------------------- flags
 class Flag {
@@ -534,6 +561,13 @@ export class Game {
     this.remote = new Map();               // host: peerId -> RemoteProxy
     this.avatars = new Map();              // client: key -> Avatar
     this.myId = null;
+    this.myIdx = null;      // client: our roster index (the welcome's 'me')
+    this._hostIdx = 0;      // host: our own roster index — inherited on promotion
+    this._nextPIdx = 1;     // host: next player index to hand out
+    this._rosterP = null;   // client: idx -> { name, team, pid } (identity rides here, not the tick)
+    this._rosterB = null;   // client: idx -> { name, team }
+    this._fullP = new Map(); // client: idx -> decoded player row, omission-safe
+    this._fullB = new Map(); // client: idx -> decoded bot row
     this._snapT = 0;
     this._sendT = 0;
     this._lastHealth = 100;
@@ -623,6 +657,16 @@ export class Game {
     this.grenades = [];
     for (const m of this.grenadeMeshes) m.visible = false;
     this.respawnTimers.clear();
+    // Omission state is per-world: a rebuilt map invalidates every row a
+    // client reconstructed (client side) and everything a connection was
+    // marked as sent (host side — the next tick goes out full).
+    this._fullP.clear();
+    this._fullB.clear();
+    // Rebuilt world, rebuilt cast: bot indices change, so the old roster is
+    // stale. Rows whose metadata hasn't re-landed are skipped until it does.
+    this._rosterP = null;
+    this._rosterB = null;
+    if (this.net?.conns) for (const c of this.net.conns.values()) c._sentRows = null;
     this.intel = []; // fresh map, no signs of anyone yet
     this.over = false;
     this._lastHealth = 100;
@@ -1243,6 +1287,9 @@ export class Game {
     if (this.mode === 'host')
       this.net.broadcast({ t: 'e', k: 'restart', map, seed });
     this.rebuild(seed, map);
+    // Fresh world, fresh bot ids: everyone rebuilds their replica and needs
+    // the roster again (their full-state maps were cleared on rebuild).
+    if (this.mode === 'host') this.net.broadcast(this._rosterMsg());
     this.onRestart?.(MAPS[map].name);
   }
 
@@ -1258,16 +1305,23 @@ export class Game {
       return;
     }
     if (d.t === 'hi') {
-      if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
-      const row = this._migRoster?.get(id);
-      if (row) { // a survivor finding the new room: restore, don't respawn
-        const p = this._restoreProxy(id, cleanName(d.name), row);
+      const migIdx = this._migRoster?.get(id);
+      if (migIdx != null) {
+        // A survivor finding the new room. Their proxy was already restored
+        // at promotion under this very peer id — what they need is a
+        // welcome, not a respawn. Seed/map ride along so a stale replica
+        // can catch the mismatch and rebuild instead of fighting it.
         this._migRoster.delete(id);
-        this.net.sendTo(id, { t: 'w', id, team: p.team, migrated: 1, mode: this.gameMode });
+        const p = this.remote.get(id);
+        if (!p) return; // lapsed entry — fall through would double-spawn
+        this.net.sendTo(id, { t: 'w', id, team: p.team, migrated: 1, mode: this.gameMode,
+          seed: this.seed, map: this.mapIndex, log: this.editLog, me: p.ridx,
+          r: this._rosterMsg() });
         this.feed(`${nameSpan(p)} rejoined ${p.team.toUpperCase()}`);
         return;
       }
-      return this._hostAddPlayer(id, cleanName(d.name));
+      if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
+      return this._hostAddPlayer(id, d.name);
     }
     const p = this.remote.get(id);
     if (!p) return;
@@ -1316,13 +1370,21 @@ export class Game {
     }
   }
 
-  _hostAddPlayer(id, name) {
+  // Identity (index, name, team, peer id) rides this one message, sent on
+  // join/leave/bot churn — the per-tick snapshot carries indices only.
+  _rosterMsg() {
+    const p = [[this._hostIdx, this.player.name, this.player.team, 'HOST']];
+    for (const pr of this.remote.values()) p.push([pr.ridx, pr.name, pr.team, pr.id]);
+    return { t: 'r', p, b: this.bots.map(b => [b.id, b.name, b.team]) };
+  }
+
+  _hostAddPlayer(id, rawName) {
     if (this.remote.size + 1 >= MAX_HUMANS) { // room full — turn them away politely
       this.net.sendTo(id, { t: 'full' });
       setTimeout(() => this.net.conns.get(id)?.close(), 400); // let the packet land
       return;
     }
-    name = String(name ?? '').replace(/[^\w \-]/g, '').trim().slice(0, 12) || 'recruit';
+    const name = cleanName(rawName); // one sanitizer, one fallback ('Player')
     // Count the host on its ACTUAL team: after a baton pass the promoted
     // host can be blue, and hardcoding green stacked every joiner wrong.
     const humans = { green: 0, blue: 0 };
@@ -1330,10 +1392,13 @@ export class Game {
     for (const p of this.remote.values()) humans[p.team]++;
     const team = humans.green <= humans.blue ? 'green' : 'blue';
     const proxy = new RemoteProxy(this, id, name, team);
+    proxy.ridx = this._nextPIdx++;
     this.remote.set(id, proxy);
     this._kdRow(proxy); // scoreboard seat from the moment they join
     this._removeBot(team);
-    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex, log: this.editLog, mode: this.gameMode });
+    this.net.sendTo(id, { t: 'w', id, team, seed: this.seed, map: this.mapIndex,
+      log: this.editLog, mode: this.gameMode, me: proxy.ridx, r: this._rosterMsg() });
+    this.net.broadcast(this._rosterMsg()); // the joiner gets it twice — idempotent
     this.feed(`${nameSpan(proxy)} joined ${team.toUpperCase()}`);
   }
 
@@ -1352,26 +1417,40 @@ export class Game {
   // host-side bodies restored to their last replicated state, so the match
   // just… keeps going.
   promoteToHost(net) {
-    const oldId = this.myId;
+    const oldIdx = this.myIdx ?? 0;
     this.mode = 'host';
     this.net = net;
     this.myId = 'HOST';
+    // Keep our old client index: every survivor's avatars and reconstructed
+    // maps are keyed by it, and re-keying mid-match would orphan them all.
+    this._hostIdx = oldIdx;
     // Client stand-in avatars give way to real bodies — RemoteProxy and Bot
     // construct their own.
     for (const av of this.avatars.values()) av.dispose();
     this.avatars.clear();
+    // Rebuild from the RECONSTRUCTED full-state maps, not the last packet:
+    // with unchanged-row omission the wire hasn't carried a complete
+    // snapshot in a long time. This is the one place that must not read
+    // raw d.p/d.b.
     this._migRoster = new Map();
-    for (const e of this._roster ?? []) {
-      const [id, , name] = e;
-      if (id === 'HOST' || id === oldId) continue;
-      this._migRoster.set(id, e);
-      this._restoreProxy(id, name, e);
+    let maxIdx = oldIdx;
+    for (const [idx, row] of this._fullP) {
+      const meta = this._rosterP?.get(idx);
+      if (!meta || meta.pid === 'HOST' || idx === oldIdx) continue;
+      this._migRoster.set(meta.pid, idx);
+      this._restoreProxy(meta.pid, meta.name, idx, meta.team, row);
+      if (idx > maxIdx) maxIdx = idx;
     }
-    for (const r of this._botRows ?? []) {
-      const [, name, team, x, y, z, , health, alive, carrier] = r;
-      const bot = new Bot(this, team, name);
+    this._nextPIdx = maxIdx + 1;
+    for (const [idx, row] of this._fullB) {
+      const meta = this._rosterB?.get(idx);
+      const [x, y, z, ry, health, alive, carrier] = row;
+      const bot = new Bot(this, meta?.team ?? 'green', meta?.name ?? null);
+      bot.id = idx;          // survivors key bot avatars by it — keep it stable
+      reserveBotId(idx);     // and never hand it to a future spawn
       bot.body.pos.set(x, y, z);
       bot.body.vel.set(0, 0, 0);
+      bot.parts.group.rotation.y = ry;
       bot.health = health;
       bot.carrier = !!carrier;
       if (!alive) {
@@ -1382,6 +1461,8 @@ export class Game {
       }
       this.bots.push(bot);
     }
+    this._fullP.clear();
+    this._fullB.clear();
     // Snapshots record that a flag is carried, not by whom — reattach it to
     // whoever on the enemy team was flagged as carrier. If the carrier was
     // the departed host, the flag drops where it was.
@@ -1408,12 +1489,15 @@ export class Game {
     setTimeout(() => { this._migRoster = null; }, 60000);
   }
 
-  // Rebuild one RemoteProxy from its last snapshot row.
-  _restoreProxy(id, name, row) {
-    const [, team, , x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = row;
+  // Rebuild one RemoteProxy from its reconstructed full-state row
+  // ([x, y, z, ry, hp, alive, carrier, tool, blocks, crouch]).
+  _restoreProxy(id, name, idx, team, row) {
+    const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = row;
     const proxy = new RemoteProxy(this, id, name, team);
+    proxy.ridx = idx;
     proxy.body.pos.set(x, y, z);
     proxy.avatar.push(x, y, z, ry);
+    proxy.yaw = ry; // uplink yaw is already model rotation; snapshot passes it through
     proxy.health = health;
     proxy.alive = !!alive;
     proxy.carrier = !!carrier;
@@ -1437,6 +1521,7 @@ export class Game {
     this.remote.delete(id);
     this.respawnTimers.delete(p);
     if (!this.over) this.bots.push(new Bot(this, p.team));
+    this.net.broadcast(this._rosterMsg()); // seat emptied, bot filled in
   }
 
   _removeBot(team) {
@@ -1447,52 +1532,118 @@ export class Game {
     this.respawnTimers.delete(b);
   }
 
+  // One full tick of state: indexed, quantized rows for every entity, plus
+  // the unconditional channels (flags, hill, captures, grenades, game-over).
+  // _broadcastSnapshot trims this per connection down to what changed.
   snapshot() {
     const ry = yaw => Math.atan2(-Math.cos(yaw), Math.sin(yaw)); // our yaw -> model rotation
-    const P = [['HOST', this.player.team, this.player.name, ...arr(this.player.body.pos),
-      ry(this.player.yaw), Math.round(this.player.health), this.player.alive ? 1 : 0,
+    const pos = p => [qx(p.x), qy(p.y), qx(p.z)];
+    const P = [[this._hostIdx, ...pos(this.player.body.pos), qa(ry(this.player.yaw)),
+      Math.round(this.player.health), this.player.alive ? 1 : 0,
       this.player.carrier ? 1 : 0, this.player.tool, this.player.blocks,
       this.player.crouched ? 1 : 0]];
     for (const p of this.remote.values())
-      P.push([p.id, p.team, p.name, ...arr(p.body.pos), p.yaw, Math.round(p.health),
+      P.push([p.ridx, ...pos(p.body.pos), qa(p.yaw), Math.round(p.health),
         p.alive ? 1 : 0, p.carrier ? 1 : 0, p.tool, p.blocks, p.crouched ? 1 : 0]);
     return {
       t: 's',
       p: P,
-      b: this.bots.map(b => [b.id, b.name, b.team, ...arr(b.body.pos),
-        b.parts.group.rotation.y, Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0,
+      b: this.bots.map(b => [b.id, ...pos(b.body.pos), qa(b.parts.group.rotation.y),
+        Math.round(b.health), b.alive ? 1 : 0, b.carrier ? 1 : 0,
         b.parts.crouched ? 1 : 0]), // crouch bit: clients drew ducking bots standing
       f: this.flags && {
-        g: [FLAG_CODE[this.flags.green.state], ...arr(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
-        b: [FLAG_CODE[this.flags.blue.state], ...arr(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
+        g: [FLAG_CODE[this.flags.green.state], ...pos(this.flags.green.pos), Math.ceil(this.flags.green.dropTimer)],
+        b: [FLAG_CODE[this.flags.blue.state], ...pos(this.flags.blue.pos), Math.ceil(this.flags.blue.dropTimer)],
       },
       h: this.hill && [this.hill.owner, Math.round(this.hill.progress * 10) / 10,
         this.hill.contested ? 1 : 0, this.hill.capTeam],
       c: [Math.round(this.captures.green * 10) / 10, Math.round(this.captures.blue * 10) / 10],
-      g: this.grenades.map(g => arr(g.pos)),
+      g: this.grenades.map(g => pos(g.pos)),
       o: this.over ? 1 : 0,
     };
   }
 
+  // Per-connection delta broadcast: a row rides the wire only when it
+  // changed since what THAT channel was last sent (the reliable ordered
+  // channel makes "sent" mean "will arrive"). Removals are explicit — an
+  // omitted row means "unchanged", never "gone". A congested channel is
+  // skipped WITHOUT updating its sent map, so the next tick resends
+  // everything the skipped tick would have.
+  _broadcastSnapshot() {
+    const snap = this.snapshot();
+    for (const conn of this.net.conns.values()) {
+      if (!conn.open) continue;
+      if (conn.dataChannel?.bufferedAmount > 64 * 1024) continue;
+      const sent = conn._sentRows ??= { p: new Map(), b: new Map() };
+      const out = { t: 's', f: snap.f, h: snap.h, c: snap.c, g: snap.g, o: snap.o };
+      for (const key of ['p', 'b']) {
+        const cur = new Set();
+        out[key] = [];
+        for (const row of snap[key]) {
+          cur.add(row[0]);
+          const prev = sent[key].get(row[0]);
+          if (!prev || !rowsEq(prev, row)) { out[key].push(row); sent[key].set(row[0], row); }
+        }
+        const rm = [];
+        for (const idx of sent[key].keys())
+          if (!cur.has(idx)) { rm.push(idx); sent[key].delete(idx); }
+        if (rm.length) (out.rm ??= {})[key] = rm;
+      }
+      conn.send(out);
+    }
+  }
+
   // ---------------- client networking ----------------
+  // Identity arrives once per churn, indexed: [[idx, name, team, pid], ...]
+  // for players (pid lets a promoted replica match rejoining survivors),
+  // [[idx, name, team], ...] for bots.
+  _applyRoster(r) {
+    const team = t => (t === 'blue' ? 'blue' : 'green');
+    this._rosterP = new Map((r?.p ?? []).map(row =>
+      [row[0], { name: cleanName(row[1]), team: team(row[2]), pid: row[3] }]));
+    this._rosterB = new Map((r?.b ?? []).map(row =>
+      [row[0], { name: cleanName(row[1]), team: team(row[2]) }]));
+  }
+
+  _replayEdits(log) {
+    this.editLog = log ?? []; // kept current below: migration hosting needs it
+    for (const e of this.editLog) {
+      if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]),
+        Math.min(Math.max(e[4] ?? 0, 0), 4)); // same clamp as a live 'boom'
+      else this.world.set(e[0], e[1], e[2], e[3]);
+    }
+  }
+
   clientOnData(d) {
-    this.lastRecv = performance.now(); // host heartbeat (snapshots beat at 12Hz)
+    this.lastRecv = performance.now(); // host heartbeat (snapshots beat at 15Hz)
     if (d.t === 'full') return this.onFull?.();
+    if (d.t === 'r') return this._applyRoster(d);
     if (d.t === 'w') {
       this.myId = d.id;
+      this.myIdx = d.me;
       this.player.team = d.team;
       if (d.mode) this.gameMode = d.mode; // rebuild below needs it (flagless TDM)
       if (d.migrated) {
-        // Baton-pass rejoin: we never left — keep the world, position, and
-        // kit we already have; the new host corrects drift via snapshots.
+        // Baton-pass rejoin: we never left — keep position and kit; the new
+        // host corrects drift via snapshots. But if its world isn't the one
+        // we remember, ours is stale: rebuild from its seed instead.
+        if (d.seed !== this.seed || (d.map ?? 0) !== this.mapIndex) {
+          this.rebuild(d.seed, d.map ?? 0);
+          this._replayEdits(d.log);
+        }
+        // The new host marks nothing as sent and never mentions the departed
+        // host's row — drop every replica so the full first snapshot
+        // repopulates from zero rather than leaving a ghost behind.
+        for (const av of this.avatars.values()) av.dispose();
+        this.avatars.clear();
+        this._fullP.clear();
+        this._fullB.clear();
+        this._applyRoster(d.r);
         this.onWelcome?.();
       } else {
         this.rebuild(d.seed, d.map ?? 0);
-        this.editLog = d.log; // kept current below: migration hosting needs it
-        for (const e of d.log) {
-          if (e[0] === 'b') this.world.carve(Math.floor(e[1]), Math.floor(e[2]), Math.floor(e[3]), e[4]);
-          else this.world.set(e[0], e[1], e[2], e[3]);
-        }
+        this._replayEdits(d.log);
+        this._applyRoster(d.r);
         this.onWelcome?.();
       }
     } else if (d.t === 's') this._clientSnapshot(d);
@@ -1500,14 +1651,14 @@ export class Game {
   }
 
   _clientSnapshot(d) {
-    // Keep the raw rows: if the host drops, any client may be elected to
-    // rebuild the authoritative sim from exactly this state.
-    this._roster = d.p;
-    this._botRows = d.b;
-    const seen = new Set();
-    for (const e of d.p) {
-      const [id, team, name, x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = e;
-      if (id === this.myId) {
+    // Merge first: the tick carries only what changed, so the reconstructed
+    // maps — iterated whole below — are the real picture. If the host drops,
+    // promoteToHost rebuilds the match from exactly these.
+    mergeSnapshot(this._fullP, this._fullB, d);
+    const want = new Set();
+    for (const [idx, r] of this._fullP) {
+      const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch] = r;
+      if (idx === this.myIdx) {
         if (!alive && this.player.alive) this._clientDied();
         if (health < this._lastHealth) { hud.damage(); sfx.hurt(); }
         this._lastHealth = health;
@@ -1518,32 +1669,39 @@ export class Game {
         if (this.player.tool === 3) hud.refreshTool(this.player);
         continue;
       }
-      seen.add(id);
-      let av = this.avatars.get(id);
-      if (!av) { av = new Avatar(this.scene, team, cleanName(name)); this.avatars.set(id, av); }
+      const meta = this._rosterP?.get(idx);
+      if (!meta) continue; // roster always lands before its rows; belt + braces
+      const key = 'p' + idx;
+      want.add(key);
+      let av = this.avatars.get(key);
+      if (!av) { av = new Avatar(this.scene, meta.team, meta.name); this.avatars.set(key, av); }
       av.setAlive(!!alive);
       av.setCrouch(!!crouch);
       av.push(x, y, z, ry);
     }
-    for (const b of d.b) {
-      const key = 'b' + b[0];
-      seen.add(key);
+    for (const [idx, r] of this._fullB) {
+      const [x, y, z, ry, , alive, , crouch] = r;
+      const meta = this._rosterB?.get(idx);
+      if (!meta) continue;
+      const key = 'b' + idx;
+      want.add(key);
       let av = this.avatars.get(key);
-      if (!av) { av = new Avatar(this.scene, b[2], b[1]); this.avatars.set(key, av); }
-      av.setAlive(!!b[7]);
-      av.setCrouch?.(!!b[10]); // host shrinks ducking bots; draw them that way
-      av.push(b[3], b[4], b[5], b[6]);
+      if (!av) { av = new Avatar(this.scene, meta.team, meta.name); this.avatars.set(key, av); }
+      av.setAlive(!!alive);
+      av.setCrouch(!!crouch); // host shrinks ducking bots; draw them that way
+      av.push(x, y, z, ry);
     }
-    // Anything not in this snapshot is gone (left the room / bot swapped out).
+    // Anything the reconstructed state no longer holds is gone (left the
+    // room / bot swapped out) — its removal rode an explicit rm list.
     for (const [key, av] of this.avatars) {
-      if (!seen.has(key)) { av.dispose(); this.avatars.delete(key); }
+      if (!want.has(key)) { av.dispose(); this.avatars.delete(key); }
     }
     const stateName = ['home', 'carried', 'dropped'];
     if (d.f && this.flags)
       for (const team of ['green', 'blue']) {
         const f = d.f[team[0]], flag = this.flags[team];
         flag.state = stateName[f[0]];
-        flag.pos.set(f[1], f[2], f[3]);
+        flag.pos.set(dx(f[1]), dy(f[2]), dx(f[3]));
         flag.dropTimer = f[4];
       }
     this._hillRow = d.h ?? null; // kept raw: a promoted replica restores it
@@ -1568,10 +1726,14 @@ export class Game {
         this.world.set(d.x, d.y, d.z, d.v);
         this.editLog.push([d.x, d.y, d.z, d.v]); // migration: late joiners get it from us
         break;
-      case 'boom':
-        this.explodeAt(d.x, d.y, d.z, d.r);
-        this.editLog.push(['b', d.x, d.y, d.z, d.r]);
+      case 'boom': {
+        // The host is untrusted input like anyone else: an oversized radius
+        // would let a patched host crater the whole map on every client.
+        const r = Math.min(Math.max(d.r ?? 0, 0), 4);
+        this.explodeAt(d.x, d.y, d.z, r);
+        this.editLog.push(['b', d.x, d.y, d.z, r]);
         break;
+      }
       case 'col': { // host collapsed a structure: replay removal + dust only
         const cells = [];
         for (let i = 0; i + 2 < d.cells.length; i += 3) {
@@ -1639,7 +1801,7 @@ export class Game {
   _clientUpdate(dt) {
     // Host-drop watchdog: a host whose tab is killed (or network unplugged)
     // never sends a close frame — WebRTC silence is the only signal, and ICE
-    // can take ages to give up on its own. Snapshots beat at 12Hz; four
+    // can take ages to give up on its own. Snapshots beat at 15Hz; four
     // seconds of silence means the host is gone and the baton must pass.
     this.clientIdleTick();
     // Cosmetic redeploy countdown — the host's 'rs' event is the real one.
@@ -1667,7 +1829,7 @@ export class Game {
     for (const av of this.avatars.values()) av.update(this.time);
     this._sendT -= dt;
     if (this._sendT <= 0 && this.net) {
-      this._sendT = 1 / 15;
+      this._sendT = 1 / 30; // 33ms input age — the uplink is tiny, spend it
       const p = this.player;
       this.net.send({ t: 's', x: p.body.pos.x, y: p.body.pos.y, z: p.body.pos.z,
         yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool,
@@ -1677,7 +1839,7 @@ export class Game {
     for (let i = 0; i < this.grenadeMeshes.length; i++) {
       const g = this._lastGrenades?.[i], m = this.grenadeMeshes[i];
       m.visible = !!g;
-      if (g) m.position.set(g[0], g[1], g[2]);
+      if (g) m.position.set(dx(g[0]), dy(g[1]), dx(g[2]));
     }
     this._shakeCamera();
     this.effects.update(dt);
@@ -1771,8 +1933,8 @@ export class Game {
       }
       this._snapT -= dt;
       if (this._snapT <= 0) {
-        this._snapT = 1 / 12;
-        this.net.broadcast(this.snapshot());
+        this._snapT = 1 / 15;
+        this._broadcastSnapshot();
       }
     }
 

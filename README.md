@@ -73,12 +73,13 @@ browsers) rides the free PeerJS cloud; after that, gameplay traffic never
 leaves the peers.
 
 If the host drops, the match doesn't. Every client keeps a migration-ready
-replica (the world edit log plus the last full snapshot), and a heartbeat
-watchdog notices when the host goes silent; a killed tab sends no goodbye. The
-survivors converge on a deterministic fallback room, the lowest-ranked one
-promotes its replica to host mid-stride (bots, score, craters, and all), and
-the rest rejoin within seconds. If that host drops too, the baton passes again.
-Chat and redeploy timers carry on like nothing happened.
+replica (the world edit log plus a continuously reconstructed full game
+state), and a heartbeat watchdog notices when the host goes silent; a killed
+tab sends no goodbye. The survivors converge on a deterministic fallback
+room, the lowest-ranked one promotes its replica to host mid-stride (bots,
+score, craters, and all), and the rest rejoin within seconds. If that host
+drops too, the baton passes again. Chat and redeploy timers carry on like
+nothing happened.
 
 Chat is built in. `T` talks to the whole room, `Y` talks to your team only (the
 host relays team chatter to teammates only, so it never crosses the lines),
@@ -88,8 +89,11 @@ white text, and the soldier holds still while you type.
 ### How many players can it handle?
 
 A room holds 8 humans, by design. The host's browser simulates everything, so
-the practical limit is the host's upload bandwidth: a full room costs roughly 1
-to 3 Mbps of upload, comfortable on most home connections.
+the practical limit is the host's upload bandwidth — kept small on purpose:
+names and teams ride a once-per-churn roster, positions are quantized to
+1/256 of a block, and the per-tick snapshot carries only the entities that
+actually changed. A full room costs well under 1 Mbps of upload, comfortable
+on any home connection.
 
 Globally there's effectively no cap. There is no game server; every room is
 hosted by a player in it, so 10 rooms or 10,000 rooms cost the project nothing.
@@ -231,16 +235,23 @@ the open at rifle range throw up a three-wide knee wall, then fight from
 behind it, standing to fire, ducking to reload.
 
 Multiplayer (`src/net.js`) wraps PeerJS in a host-authoritative star: clients
-send inputs and actions, the host simulates, and everyone renders snapshots
-with about 130 ms of interpolation (`src/avatar.js`). Maps are
-seed-deterministic, so joiners regenerate the identical world locally and
-replay a compact edit log to catch up on every dug trench and crater. The room
-browser is matchmaking's probe with the hood up: hosts answer a ping with a
-roster summary (map, mode, score, names), so listing a room never joins it.
-Host migration (`src/main.js`) rides on that same edit log: on host silence the
-clients elect a successor by peer-id rank, claim the derived room
-`<code>-M<n>`, and rebuild the authoritative sim from the last snapshot. The
-match survives its host.
+send inputs and actions at 30 Hz, the host simulates, and everyone renders
+delta snapshots at 15 Hz (`src/game.js`). The wire stays lean three ways:
+identity (index, name, team) rides a once-per-churn roster instead of every
+tick; positions and yaw are quantized to fixed-point integers; and each
+connection is sent only the rows that changed since its last tick, with
+explicit removals — a congested channel is skipped whole and catches up next
+tick. Clients merge those deltas into a full reconstructed state, which is
+exactly what a promoted host rebuilds from. Interpolation delay in
+`src/avatar.js` is derived from measured arrival jitter (about 80–100 ms on a
+clean link) instead of a hardcoded buffer. Maps are seed-deterministic, so
+joiners regenerate the identical world locally and replay a compact edit log
+to catch up on every dug trench and crater. The room browser is matchmaking's
+probe with the hood up: hosts answer a ping with a roster summary (map, mode,
+score, names), so listing a room never joins it. Host migration (`src/main.js`)
+rides on that same reconstruction: on host silence the clients elect a
+successor by peer-id rank, claim the derived room `<code>-M<n>`, and rebuild
+the authoritative sim from it. The match survives its host.
 
 ## Run it locally
 

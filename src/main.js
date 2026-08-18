@@ -227,7 +227,7 @@ async function migrateRoom(deadNet) {
   const gen = ++migrationGen;
   const migCode = `${roomCode}-M${gen}`;
   const myOldId = game.myId;
-  const all = (game._roster ?? []).map(e => e[0])
+  const all = [...(game._rosterP?.values() ?? [])].map(m => m.pid)
     .filter(id => id !== 'HOST').sort();
   const rank = Math.max(0, all.indexOf(myOldId)); // lowest survivor claims first
   game.hud.message('HOST DROPPED — PASSING THE BATON…', '#ffd97a');
@@ -270,8 +270,8 @@ function startMigration(n) {
   // 'peer-unavailable' while we wait for the new host to register. That
   // stale handler would reset the lobby mid-migration and kill the loop.
   n.handlers = {};
-  if (game.mode !== 'client' || !game.myId || !game._roster)
-    return failMigration(n.peer); // died before the first snapshot — nothing to save
+  if (game.mode !== 'client' || !game.myId || !game._rosterP)
+    return failMigration(n.peer); // died before the first roster — nothing to save
   migrateRoom(n).catch(() => failMigration(n.peer));
 }
 

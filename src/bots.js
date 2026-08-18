@@ -20,6 +20,10 @@ const BOT_SKILL = BOTQ[QUERY.get('botq')] ?? 1.0;
 let n = 0;        // name rotation
 let nextId = 0;   // stable identity for network snapshots
 
+// Host migration restores bots under their OLD ids (clients key avatars by
+// them); make sure a future spawn never reissues one.
+export function reserveBotId(idx) { if (idx >= nextId) nextId = idx + 1; }
+
 export class Bot {
   constructor(game, team, name = null) {
     this.game = game;

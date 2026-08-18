@@ -43,7 +43,6 @@ export class Net {
         // channel from an abandoned knock never opens, so it can never
         // steal the slot; whichever live channel opens last rightfully wins.
         net.conns.set(conn.peer, conn);
-        net.handlers.onJoin?.(conn.peer, conn);
       });
       conn.on('data', d => net.handlers.onData?.(conn.peer, d));
       const drop = () => {
@@ -57,7 +56,8 @@ export class Net {
       conn.on('close', () => { console.debug(`[net] conn close ${conn.peer}`); drop(); });
       conn.on('error', e => { console.debug(`[net] conn error ${conn.peer} ${e?.type ?? e}`); drop(); });
       conn.on('iceStateChanged', s => console.debug(`[net] ice ${conn.peer} ${s}`));
-      net.conns.set(conn.peer, conn);
+      // No eager conns.set here: claiming the slot before 'open' let a
+      // zombie channel (abandoned knock, never opens) evict the live one.
     });
     return net;
   }

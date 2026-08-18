@@ -112,6 +112,9 @@ export class VoxelWorld {
 
   set(x, y, z, v) {
     if (x < 0 || y < 0 || z < 0 || x >= SX || y >= SY || z >= SZ) return false;
+    // Wire values are untrusted: an out-of-palette v would render as holes
+    // in the mesh and crash the AO lookup. Reject, don't clamp.
+    if (!(v >= 0 && v < PALETTE.length)) return false;
     this.data[idx(x, y, z)] = v;
     // Queue, don't rebuild: a bot dig swing can land 20 set() calls in one
     // frame, and each used to synchronously remesh up to 5 chunks. The flush
