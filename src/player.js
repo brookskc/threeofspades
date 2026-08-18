@@ -66,6 +66,12 @@ export class Player {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
         const menuUp = !document.getElementById('menu').classList.contains('hidden');
         if (e.target.id === 'chatin' || menuUp) return;
+        // A hidden widget holding focus is a trap: the OS treats held keys
+        // as text entry and macOS pops the accented-character picker
+        // mid-sprint. Drop the focus outright — the hold's repeats then
+        // land on the body like they should have all along.
+        e.target.blur();
+        e.preventDefault();
       }
       // Pointer-locked means the game owns the keyboard: no stray-focused
       // widget may perform its default action. A focused <select> opens its
