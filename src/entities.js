@@ -62,6 +62,7 @@ export class Body {
             if (this.step !== false && this.onGround && !this.inWater
                 && this.vel.y <= 0.01 && this._stepFits()) {
               p.y += 1.001;
+              this._stepped = true; // first-person camera eases this pop out
               return;
             }
             const sign = Math.sign(delta);
@@ -157,10 +158,18 @@ export function makeSoldier(teamColor) {
   const head = box(0.34, 0.34, 0.34, skin, 0, 1.42, 0);
   const brim = box(0.4, 0.12, 0.4, cloth, 0, 1.62, 0); // helmet brim
   const gun = box(0.09, 0.12, 0.7, dark, 0.2, 1.1, -0.35);
+  // The spade rides in the right hand too, shown only while digging.
+  const wood = new THREE.MeshBasicMaterial({ color: 0x6b4a2c });
+  const spade = new THREE.Group();
+  box(0.05, 0.05, 0.55, wood, 0, 0, -0.18, spade);   // handle
+  box(0.17, 0.22, 0.04, dark, 0, 0, -0.48, spade);   // blade
+  spade.position.set(0.2, 1.1, -0.2);
+  spade.visible = false;
+  g.add(spade);
   const blob = blobShadow();
   g.add(blob);
 
-  return { group: g, legL, legR, armL, armR, head, torso, gun, blob, brim };
+  return { group: g, legL, legR, armL, armR, head, torso, gun, spade, blob, brim };
 }
 
 // A floating callsign: crisp canvas sprite riding above the helmet. It's an

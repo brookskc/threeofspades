@@ -93,12 +93,16 @@ function showPlay(label) {
   $('playBtn').textContent = label;
 }
 
+let sessionLive = false; // a match was entered: pause shows the slim screen
 function setPlaying(v) {
   playing = v;
+  if (v) sessionLive = true;
   $('menu').classList.toggle('hidden', v);
-  // In-session menu (Esc pause / rotation break) is a different screen from
-  // the home lobby: no callsign, no QUICK MATCH — just resume or leave.
-  $('menu').classList.toggle('paused', !v && !!net);
+  // In-session menu (Esc pause / rotation break / a lost pointer lock) is a
+  // different screen from the home lobby: no callsign, no map selector, no
+  // QUICK MATCH — just resume or leave. Applies solo too: an OS-level unlock
+  // mid-fight should never dump the lobby chrome on the player.
+  $('menu').classList.toggle('paused', !v && (sessionLive || !!net));
   $('hud').classList.toggle('on', v);
   game.player.vmRoot.visible = v;
   $('roomcode').style.display = v && roomCode ? 'block' : 'none';
@@ -591,6 +595,7 @@ document.addEventListener('pointerlockchange', () => {
   // Drop all held inputs so nobody runs/shoots blind while the menu is up.
   game.player.keys = {};
   game.player.mouseDown = [false, false, false];
+  game.hud.statsHide(); // a Tab keyup lost to the unlock can't strand it
   if (matchmaking && !net) { // Esc mid-search, before any room adopted us
     searchCanceled = true;
     $('menu').classList.remove('searching');

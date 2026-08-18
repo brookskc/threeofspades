@@ -1697,6 +1697,10 @@ export class Game {
     this.time += dt;
     this.world.animateSky(this.time);
     hud.minimap(this);
+    // The scoreboard mirrors the held key exactly: if a Tab keyup gets lost
+    // to a pointer-lock hiccup or a window switch, the overlay can never
+    // strand itself over the screen. Runs while dead too (TAB works there).
+    if (!this.player.keys.Tab) hud.statsHide();
     // Positional audio hears from the player's ear, right vector included.
     {
       const p = this.player, e = p.body.eye();

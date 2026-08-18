@@ -86,14 +86,18 @@ export const sfx = {
   slide:     () => burst({ dur: 0.32, freq: 620, gain: 0.3, q: 0.7 }),
   // Positional variant: sfx.at('step', {x,y,z}) pans by bearing off the
   // listener's right ear and fades with distance; past 70 blocks, silence.
+  // Quiet work sounds don't carry across the map: footsteps and shovels fade
+  // fast and cut out close by; gunfire and explosions still travel.
   at(name, pos) {
     if (!ctx || !listener || !this[name]) return;
+    const QUIET = { step: 24, dig: 30 };
+    const cutoff = QUIET[name] ?? 70;
     const dx = pos.x - listener.x, dy = (pos.y ?? listener.y) - listener.y,
           dz = pos.z - listener.z;
     const d = Math.hypot(dx, dy, dz);
-    if (d > 70) return;
+    if (d > cutoff) return;
     _pan = d < 1.5 ? 0 : Math.max(-0.9, Math.min(0.9, (dx * listener.rx + dz * listener.rz) / d));
-    _scale = 1 / (1 + d * 0.09);
+    _scale = 1 / (1 + d * (QUIET[name] ? 0.16 : 0.09));
     this[name]();
     _pan = 0; _scale = 1;
   },

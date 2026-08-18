@@ -46,6 +46,7 @@ export class Player {
     this._sinceShot = 99; // recovery starts 0.12s after the last shot
     this.aiming = false;  // RMB held with a gun out
     this.aimK = 0;        // 0..1 iron-sights blend (viewmodel + crosshair)
+    this.stepK = 0;       // banked auto-step rise the camera is easing out
     this.swing = 0; // spade chop animation
     this.crouched = false; // hold CTRL: slower, steadier aim, ledge grip
     this.carrier = false; // carrying the enemy flag?
@@ -149,16 +150,27 @@ export class Player {
     this.camera.add(root);
     this.vmRoot = root;
 
+    // Iron sights are REAL: a rear notch and a front post. Sighted in
+    // (aimK = 1) the gun sits at (0, -0.09) under the eye, so the local y of
+    // the aim line is +0.09 — the front post tip lives exactly there, with
+    // the rear wings just below it. Line the tip up with the target and fire.
+    const sights = (g, frontZ, rearZ) => {
+      mk(0.012, 0.055, 0.012, dark, 0, 0.0625, frontZ, g);     // front post
+      mk(0.012, 0.04, 0.03, dark, -0.024, 0.055, rearZ, g);    // rear wing L
+      mk(0.012, 0.04, 0.03, dark,  0.024, 0.055, rearZ, g);    // rear wing R
+    };
     const rifle = new THREE.Group();
     mk(0.05, 0.07, 0.85, dark, 0, 0, -0.5, rifle);       // barrel
     mk(0.07, 0.12, 0.35, wood, 0, -0.05, -0.05, rifle);  // stock
     mk(0.05, 0.1, 0.06, skin, 0, -0.12, 0.05, rifle);    // hand
+    sights(rifle, -0.85, -0.12);
     this.vm.rifle = rifle;
 
     const smg = new THREE.Group();
     mk(0.06, 0.08, 0.5, dark, 0, 0, -0.32, smg);
     mk(0.05, 0.16, 0.07, dark, 0, -0.11, -0.12, smg);    // magazine
     mk(0.05, 0.1, 0.06, skin, 0, -0.1, 0.05, smg);
+    sights(smg, -0.53, -0.1);
     this.vm.smg = smg;
 
     const spade = new THREE.Group();
@@ -214,14 +226,16 @@ export class Player {
     // Crouch-walking grips the rim: no falling into ravines or off parapets.
     // A slide has no such brakes — skidding off the edge is the whole point.
     b.guard = this.crouched && !sliding;
+    const shift = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
     // Iron sights: RMB with a gun trades mobility for accuracy.
     this.aiming = !!(this.mouseDown[2] && this.tool < 2);
     const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1)
       * (this.aiming ? 0.6 : 1);
-    // Auto-step climbs one-block rises — but not at a sprint or mid-slide:
-    // charging full-tilt up terraces would make high ground too cheap.
-    b.step = sprint === 1 && !sliding;
+    // Auto-step climbs one-block rises. Crouching keeps you hugging the
+    // ground — no clambering while sneaking — unless you hold SHIFT to
+    // climb anyway; a slide skids over nothing.
+    b.step = (!this.crouched || shift) && !sliding;
     const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const r = new THREE.Vector3(-f.z, 0, f.x);
     const wish = new THREE.Vector3();
@@ -241,6 +255,12 @@ export class Player {
     }
     b.move(dt);
 
+    // Auto-step smoothing: the body pops up a full block in one physics
+    // frame; the camera shouldn't. A step banks +1 into stepK and the eye
+    // eases it back out, so stair-climbing reads as a smooth rise.
+    if (b._stepped) { this.stepK = Math.min(1.05, (this.stepK ?? 0) + 1); b._stepped = false; }
+    this.stepK = Math.max(0, (this.stepK ?? 0) - dt * 7);
+
     // Camera: eye + walk bob + recoil kick.
     const moving = wish.lengthSq() > 1 && b.onGround;
     this.bob = moving ? this.bob + dt * 10 : 0;
@@ -250,7 +270,8 @@ export class Player {
     this._sinceShot += dt;
     if (this._sinceShot > 0.12) this.climb = Math.max(0, this.climb - dt * 0.105);
     const eye = b.eye();
-    this.camera.position.set(eye.x, eye.y + Math.sin(this.bob) * 0.045 * (moving ? 1 : 0), eye.z);
+    this.camera.position.set(eye.x,
+      eye.y + Math.sin(this.bob) * 0.045 * (moving ? 1 : 0) - (this.stepK ?? 0), eye.z);
     this.camera.rotation.set(this.pitch + this.climb + this.recoil * 0.05, this.yaw - Math.PI / 2, 0, 'YXZ');
     // three.js cameras look down -Z; the -PI/2 offset aligns it with our yaw convention.
 
@@ -267,8 +288,9 @@ export class Player {
       - (this.reloading > 0 ? 0.18 * Math.sin(Math.PI * (1 - this.reloading / TOOLS[this.tool].reload)) : 0);
     this.vmRoot.position.z = -0.25 - chop * 0.22 + this.aimK * 0.1;
     this.vmRoot.rotation.x = -this.recoil * 0.35 - chop * 0.5;
+    // Fully sighted in, the dot is gone entirely — the sights do the aiming.
     const xh = document.getElementById('crosshair');
-    if (xh) xh.style.opacity = 1 - this.aimK * 0.9;
+    if (xh) xh.style.opacity = 1 - this.aimK;
 
     // Aim zoom.
     const aiming = this.mouseDown[2] && this.tool < 2;
@@ -312,10 +334,14 @@ export class Player {
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
     this.recoil = Math.min(1, this.recoil + (t.key === 'rifle' ? 0.9 : 0.35));
+    sfx[t.key]();
+    // Fire FIRST, then kick: the shot leaves along the aim you had when you
+    // squeezed, and the climb only taxes the FOLLOW-UP shots. (Applying the
+    // kick before firing made every first shot land high — players were
+    // aiming low to compensate.)
+    this.game.requestShoot(this, t);
     this.climb = Math.min(0.14, this.climb + (t.kick ?? 0)); // aim climbs per shot
     this._sinceShot = 0;
-    sfx[t.key]();
-    this.game.requestShoot(this, t);
     this.game.hud.refreshTool(this);
   }
 
@@ -352,6 +378,7 @@ export class Player {
     this.alive = true;
     this.protT = 2; // spawn protection: 2s, drains twice as fast moving, gone if you fire
     this.slideT = 0; this.slideCd = 0;
+    this.stepK = 0;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
     this.grenades = 3;      // fresh loadout on every life — a spent belt used
     this.grenadeRegen = 0;  // to follow you through respawns and map rotations

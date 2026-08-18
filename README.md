@@ -155,11 +155,11 @@ are a skill, not a suggestion.
 
 ### Controls
 
-`WASD` move — one-block rises are stairs: walk into them and you step up,
-no jump needed (sprinting past them stays flat, so a charge doesn't become
-a free climb) · `Space` jump/swim · `Shift` sprint · `CTRL` crouch (slower,
-steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
-taller than one block, though single steps still pass so slopes stay walkable)
+`WASD` move — one-block rises are stairs: walk (or sprint, `Shift` held)
+into them and you step up, no jump needed · `Space` jump/swim · `Shift`
+sprint · `CTRL` crouch (slower, steadier aim, and a ledge grip: crouch-walking
+refuses to step off any drop taller than one block, and stays too low to
+climb — crouching skips the auto-step unless you hold `SHIFT` to clamber)
 — and crouch *while sprinting* to slide: a fast, low, barely-steerable skid
 that jump pops you out of.
 · `LMB` fire/dig/place/throw · `RMB` aim · `1-5` / `Q`·`E` select tool (the
@@ -172,8 +172,10 @@ it drains twice as fast while you move and vanishes the moment you fire, so
 spawn-camping dies here but so does hiding in it.
 
 Every sound sits in the world: footsteps, gunfire, and shovels pan to the
-correct ear and fade with distance, so you can hear a fight over the ridge —
-and hear someone tunneling under your feet. Death costs 10 seconds on the redeploy timer, for humans and
+correct ear and fade with distance. Gunfire carries across the map, but
+footsteps die out past ~24 blocks and digging past ~30 — quiet work stays
+quiet — so you can hear a fight over the ridge, and only hear someone
+tunneling when they're actually under your feet. Death costs 10 seconds on the redeploy timer, for humans and
 bots alike, so clearing a base actually clears it. A minimap in the top left
 shows the terrain (craters and all), both flag stands and the live position of
 each flag (or the hill ring, tinted by who holds it and flashing white while
@@ -201,7 +203,11 @@ Teams advance on a broad front (each bot keeps a lane), creep cautiously when
 caught past midfield alone, and in CTF sort themselves into roles by stable
 rank: one guards the stand (and walls off the enemy approach with spare
 blocks), one holds midfield, the rest attack — until the flag moves, at which
-point the two closest responders drop everything, as before.
+point the two closest responders drop everything — but there's no psychic
+tracking: a flag thief is only chased to the freshest sighting his gunfire,
+kills, or a spotter's eyes betrayed, and failing that the responders cut off
+the obvious run home across midfield. Invisible, he isn't; clairvoyant, they
+aren't.
 
 In a fight they use the terrain kit like players do: strafe up close,
 crouch-fire at range for the steadier spread, lob their one frag per life over
@@ -214,7 +220,9 @@ scale with a per-bot skill roll; `?botq=easy|hard` skews the whole room.
 
 Underneath it all is the same sense-decide-act loop: acquire targets with
 line-of-sight checks, path toward objectives, and shovel through obstacles
-when stuck. Swimming counts, so a bot that falls in the Pinefall creek digs
+when stuck. Unengaged they run at a near-player pace, and a digging bot
+switches the rifle for an actual spade in its hands. Swimming counts, so a
+bot that falls in the Pinefall creek digs
 the bank into a staircase and climbs out, overhangs included. But they'd
 rather not get their feet wet: a bot whose path ends at a ravine rim lays a
 plank bridge ahead of itself and walks across at shovel pace. Bots caught in

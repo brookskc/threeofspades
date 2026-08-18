@@ -143,11 +143,18 @@ export class Bot {
     if (g.hill) return g.hill.pos;   // koth: converge — the point is the point
     const own = g.flags?.[this.team];
     if (!own) { this.role = 'attack'; return this._huntGoal(); }     // deathmatch: hunt
-    // Flag defense: the two closest free bots drop everything — sprint at the
-    // thief while it's carried, converge on the flag while it's on the ground.
+    // Flag defense: the two closest free bots drop everything — converge on
+    // the flag while it's on the ground, and while it's carried... no psychic
+    // tracking. The thief is only as found as our intel: chase the freshest
+    // sighting of him (he pinged us by firing, killing, or being spotted);
+    // with no sightings, cut off the obvious run home across midfield.
     if (own.state === 'carried' && own.carrier) {
-      this.responding = this._isResponder(own.carrier.body.pos);
-      if (this.responding) return own.carrier.body.pos;              // hunt the thief
+      const spot = g.huntSpot(this.team);
+      const cut = spot
+        ? new THREE.Vector3(spot.x, g.world.surface(spot.x | 0, spot.z | 0), spot.z)
+        : g.standOf(this.team).clone().lerp(g.standOf(g.enemyOf(this.team)), 0.5);
+      this.responding = this._isResponder(cut);
+      if (this.responding) return cut;
     }
     if (own.state === 'dropped') {
       this.responding = this._isResponder(own.pos);
@@ -204,10 +211,30 @@ export class Bot {
       this.wanderT = 1.5 + Math.random() * 2;
       this.wander.set((Math.random() - .5) * 8, 0, (Math.random() - .5) * 8);
     }
-    // Responders beeline; swimmers mostly beeline too — a full-strength
-    // wander vector in the water just yanks a climbing bot off its staircase
-    // and back into the channel (the old creek-bobbing loop).
-    const dest = this.responding ? goal.clone() : goal.clone().add(
+    // Responders beeline; so do bridgelayers — a wander wobble over an open
+    // ravine walks the bot off the side of its own deck. Swimmers mostly
+    // beeline too — a full-strength wander vector in the water just yanks a
+    // climbing bot off its staircase and back into the channel (the old
+    // creek-bobbing loop).
+    // Rim check ahead in the goal direction: a wander wobble near a
+    // drop-off staggers the bot down the face or off the side of its own
+    // deck, so near a bridgeable rim the beeline wins. Deep scan — a tall
+    // deck over a gorge must read the true bottom, not four blocks down.
+    let rimAhead = false;
+    if (b.onGround && !b.inWater && this.blocks > 0) {
+      const rx = goal.x - b.pos.x, rz = goal.z - b.pos.z;
+      const rl = Math.hypot(rx, rz);
+      if (rl > 2) {
+        const gx = Math.floor(b.pos.x + rx / rl * 1.4);
+        const gz = Math.floor(b.pos.z + rz / rl * 1.4);
+        const fy = Math.floor(b.pos.y);
+        let drop = 0;
+        for (let y = fy - 1; y >= fy - 16 && !g.world.solid(gx, y, gz); y--) drop++;
+        rimAhead = drop >= 3 && goal.y > fy - drop;
+      }
+    }
+    const bridging = g.time - this.lastBridge < 0.9;
+    const dest = (this.responding || bridging || rimAhead) ? goal.clone() : goal.clone().add(
       b.inWater ? this.wander.clone().multiplyScalar(0.25) : this.wander);
 
     // Dry-land seeking: swimming or wading the shelf, steer for the nearest
@@ -378,17 +405,27 @@ export class Bot {
       const gx = Math.floor(b.pos.x + dir.x * 1.4);
       const gz = Math.floor(b.pos.z + dir.z * 1.4);
       let drop = 0;
-      for (let y = fy - 1; y >= fy - 4 && !w.solid(gx, y, gz); y--) drop++;
+      for (let y = fy - 1; y >= fy - 16 && !w.solid(gx, y, gz); y--) drop++;
       // Bridge only when the goal sits ABOVE the bottom of the drop ahead:
       // a ravine between two banks qualifies (even when the far bank is
       // lower); a valley we're descending into doesn't — walking down is
-      // the point there.
+      // the point there. The scan reaches sixteen deep so a tall deck over
+      // a gorge still reads the true bottom, not four blocks below the
+      // planks — otherwise the bot stops bridging mid-span and walks off.
       if (drop >= 3 && goal.y > fy - drop) {
         this.bridgeT = 0.35;
-        if (g.tryBuild(this, gx, fy - 1, gz)) this.lastBridge = g.time;
+        this.lastBridge = g.time; // hold the bridgelayer's pace while a drop is ahead
+        // Deck the nearest hole first: hopping between plank tops skips
+        // onGround frames, so always aiming 1.4 ahead can skip a column —
+        // and a one-column gap in the deck is a fall into the ravine.
+        for (const ahead of [0.8, 1.3, 1.8]) {
+          const px = Math.floor(b.pos.x + dir.x * ahead);
+          const pz = Math.floor(b.pos.z + dir.z * ahead);
+          if (w.solid(px, fy - 1, pz)) continue;      // already decked
+          if (g.tryBuild(this, px, fy - 1, pz)) break; // nearest hole plugged
+        }
       }
     }
-    const bridging = g.time - this.lastBridge < 0.9;
 
     // Group up: past midfield with no teammate in sight is how lone bots get
     // picked off. Creep cautiously until the team catches up. Defenders and
@@ -407,11 +444,13 @@ export class Bot {
     // Digging pace applies in water too: at full swim speed a bot outswims
     // its own shovel cadence (~1 block per swing) and never sits at a bank
     // face long enough to clear the ledge — the creek-bobbing loop.
+    // Bots sprint too: unengaged and with somewhere to be, they run nearly
+    // as fast as a sprinting player (5.4 × 1.45). Combat drops to a walk.
     const speed = (b.inWater ? (digging ? 1.4 : 3.2)
       : this.target ? 3.4
       : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
-      : this.responding ? 5.8      // urgency: our flag is on the ground
-      : 4.6) * (cautious ? 0.45 : 1);
+      : this.responding ? 6.2      // urgency: our flag is on the ground
+      : 6.0) * (cautious ? 0.45 : 1);
     b.vel.x += (dir.x * speed - b.vel.x) * Math.min(1, dt * 8);
     b.vel.z += (dir.z * speed - b.vel.z) * Math.min(1, dt * 8);
 
@@ -512,18 +551,16 @@ export class Bot {
       if (ang > 1e-3) this.face.lerp(want, Math.min(1, 7 * dt / ang)).normalize();
     }
     pg.rotation.y = Math.atan2(-this.face.x, -this.face.z);
+    // Tool in hand matches the work: spade out while the shovel is swinging.
+    const shoveling = g.time - this.lastDig < 0.9;
+    this.parts.gun.visible = !shoveling;
+    this.parts.spade.visible = shoveling;
     animateSoldier(this.parts, Math.hypot(b.vel.x, b.vel.z), g.time + this.name.length);
   }
 
   _acquire() {
-    // A designated defender tunnel-visions the flag thief, even from afar.
-    const own = this.game.flags?.[this.team]; // null in flagless modes (tdm/koth)
-    if (this.responding && own?.state === 'carried' && own.carrier?.alive) {
-      const c = own.carrier;
-      if (this.body.pos.distanceTo(c.body.pos) < 64 &&
-          this.game.losClear(this.body.eye(), c.body.eye())) return c;
-    }
-    // Everyone else must be in front of you — or close enough to hear.
+    // The flag thief gets no psychic outline: he is seen by the same eyes as
+    // everyone else — in front of you, or close enough to hear.
     const to = new THREE.Vector3();
     let best = null, bestD = 48;
     for (const f of this.game.foesOf(this.team)) {
@@ -579,6 +616,8 @@ export class Bot {
   die(killer) {
     this.alive = false;
     this.deadT = 0; // corpse tumble starts; the body hides itself when done
+    this.parts.gun.visible = true; // drop the spade, back to the rifle
+    this.parts.spade.visible = false;
     this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.onDeath(this, killer);
   }
