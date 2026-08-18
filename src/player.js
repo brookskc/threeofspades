@@ -151,14 +151,15 @@ export class Player {
     this.camera.add(root);
     this.vmRoot = root;
 
-    // Iron sights are REAL: a rear notch and a front post. Sighted in
-    // (aimK = 1) the gun sits at (0, -0.09) under the eye, so the local y of
-    // the aim line is +0.09 — the front post tip lives exactly there, with
-    // the rear wings just below it. Line the tip up with the target and fire.
+    // Iron sights are REAL: a rear notch and a front post, on ONE sight
+    // plane. Sighted in (aimK = 1) the gun sits at (0, -0.09) under the eye,
+    // so the local y of the aim line is +0.09 — the front post tip AND the
+    // rear wing tops both live exactly there (the wings run down flush with
+    // the barrel). Line the post up with the target between the wings, fire.
     const sights = (g, frontZ, rearZ) => {
       mk(0.012, 0.055, 0.012, dark, 0, 0.0625, frontZ, g);     // front post
-      mk(0.012, 0.04, 0.03, dark, -0.024, 0.055, rearZ, g);    // rear wing L
-      mk(0.012, 0.04, 0.03, dark,  0.024, 0.055, rearZ, g);    // rear wing R
+      mk(0.012, 0.055, 0.03, dark, -0.024, 0.0625, rearZ, g);  // rear wing L
+      mk(0.012, 0.055, 0.03, dark,  0.024, 0.0625, rearZ, g);  // rear wing R
     };
     const rifle = new THREE.Group();
     mk(0.05, 0.07, 0.85, dark, 0, 0, -0.5, rifle);       // barrel

@@ -147,7 +147,7 @@ function adoptHost(n, code, opts = {}) {
         status(`hosting <b>PUBLIC ROOM ${num}</b> — quick-match players will drop in`);
         $('roomcode').querySelector('b').textContent = 'PUBLIC ' + num;
       } else {
-        status(`room code <b>${code}</b> — share it, then deploy`);
+        status(`room code <b>${code}</b> — share it`);
         $('roomcode').querySelector('b').textContent = code;
       }
       showPlay('DEPLOY — START MATCH');
@@ -366,12 +366,17 @@ $('hostBtn').addEventListener('click', () => {
   game.mode = 'host';
   game.player.name = callsign();
   game.rebuild(Math.floor(Math.random() * 1e9), applyHostPrefs());
+  // Pointer lock is only gesture-valid inside this click — take it now and
+  // drop straight in; a refused lock leaves the DEPLOY button as fallback.
+  const lock = renderer.domElement.requestPointerLock();
+  lock?.catch?.(() => {});
   const tryCode = () => {
     const code = params.get('code')?.toUpperCase() ?? makeCode();
     adoptHost(Net.host(code, {}), code, { onTaken: tryCode });
   };
   tryCode();
   status('creating room…');
+  if (document.pointerLockElement === renderer.domElement) setPlaying(true);
 });
 
 $('joinBtn').addEventListener('click', () => {
@@ -383,10 +388,15 @@ $('joinBtn').addEventListener('click', () => {
   initAudio();
   game.mode = 'client';
   game.player.name = callsign();
+  // Lock in the click, drop straight in: the world snaps to the host's map
+  // when the welcome lands a moment later (same warm-up as quick match).
+  const lock = renderer.domElement.requestPointerLock();
+  lock?.catch?.(() => {});
   status('connecting…');
   const n = Net.join(code, {});
   adoptJoin(n, code);
   n.handlers.onOpen = () => n.send({ t: 'hi', name: game.player.name });
+  if (document.pointerLockElement === renderer.domElement) setPlaying(true);
 });
 
 // --- quick match: drop into a public room with strangers ---

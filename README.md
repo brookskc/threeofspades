@@ -270,6 +270,8 @@ imports over `file://`. Any static server avoids this.)
 ## Roadmap
 
 - Classic 512² maps, territorial control, map seed selector.
+- AFK detection: idle players get flagged, then spectated or kicked so
+  quick-match seats go to people actually holding a rifle.
 
 ## License
 
