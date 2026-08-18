@@ -69,7 +69,7 @@ export class Player {
         this._selectTool((this.tool + (e.code === 'KeyE' ? 1 : -1) + TOOLS.length) % TOOLS.length);
       if (e.code === 'KeyR' && this.tool < 2 && this.ammo[this.tool] < TOOLS[this.tool].mag)
         this._reload();
-      if (e.code === 'Space') this.body.jump();
+      if (e.code === 'Space') { this.slideT = 0; this.body.jump(); } // hop out of a slide
     });
     addEventListener('keyup', e => {
       this.keys[e.code] = false;
@@ -194,18 +194,34 @@ export class Player {
     // Crouch (hold CTRL): trades speed for a steadier aim. Both heights still
     // span two voxel rows, so standing up can never wedge us into a ceiling.
     this.crouched = !!(this.keys['ControlLeft'] || this.keys['ControlRight']);
-    const targetH = this.crouched ? 1.15 : 1.75;
+    // Slide: crouch mid-sprint at speed and you skid low — a burst of
+    // momentum, barely any steering, no ledge-guard. Jump pops out of it.
+    this.slideT = Math.max(0, (this.slideT ?? 0) - dt);
+    this.slideCd = Math.max(0, (this.slideCd ?? 0) - dt);
+    const hspeed = Math.hypot(b.vel.x, b.vel.z);
+    if (this.crouched && !this._wasCrouched && this.keys['ShiftLeft']
+        && b.onGround && hspeed > 6 && this.slideCd <= 0) {
+      this.slideT = 0.7; this.slideCd = 1.4;
+      const boost = 9 / Math.max(hspeed, 0.01);
+      b.vel.x *= boost; b.vel.z *= boost;
+      sfx.slide();
+    }
+    if (hspeed < 3) this.slideT = 0;
+    this._wasCrouched = this.crouched;
+    const sliding = this.slideT > 0;
+    const targetH = sliding ? 1.0 : this.crouched ? 1.15 : 1.75;
     b.half.h += (targetH - b.half.h) * Math.min(1, dt * 10);
     // Crouch-walking grips the rim: no falling into ravines or off parapets.
-    b.guard = this.crouched;
+    // A slide has no such brakes — skidding off the edge is the whole point.
+    b.guard = this.crouched && !sliding;
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
     // Iron sights: RMB with a gun trades mobility for accuracy.
     this.aiming = !!(this.mouseDown[2] && this.tool < 2);
     const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1)
       * (this.aiming ? 0.6 : 1);
-    // Auto-step climbs one-block rises — but not at a sprint: charging
-    // full-tilt up terraces would make high ground too cheap.
-    b.step = sprint === 1;
+    // Auto-step climbs one-block rises — but not at a sprint or mid-slide:
+    // charging full-tilt up terraces would make high ground too cheap.
+    b.step = sprint === 1 && !sliding;
     const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const r = new THREE.Vector3(-f.z, 0, f.x);
     const wish = new THREE.Vector3();
@@ -214,9 +230,15 @@ export class Player {
     if (this.keys['KeyD']) wish.add(r);
     if (this.keys['KeyA']) wish.sub(r);
     if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(speed);
-    // Snappy but not slippery.
-    b.vel.x += (wish.x - b.vel.x) * Math.min(1, dt * 12);
-    b.vel.z += (wish.z - b.vel.z) * Math.min(1, dt * 12);
+    // Snappy but not slippery. A slide overrides steering entirely: momentum
+    // and a little ground friction decide where you stop.
+    if (sliding) {
+      const fr = Math.max(0, 1 - dt * 1.6);
+      b.vel.x *= fr; b.vel.z *= fr;
+    } else {
+      b.vel.x += (wish.x - b.vel.x) * Math.min(1, dt * 12);
+      b.vel.z += (wish.z - b.vel.z) * Math.min(1, dt * 12);
+    }
     b.move(dt);
 
     // Camera: eye + walk bob + recoil kick.
@@ -328,6 +350,8 @@ export class Player {
     this.aiming = false; this.aimK = 0;
     this.health = 100;
     this.alive = true;
+    this.protT = 2; // spawn protection: 2s, drains twice as fast moving, gone if you fire
+    this.slideT = 0; this.slideCd = 0;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
     this.grenades = 3;      // fresh loadout on every life — a spent belt used
     this.grenadeRegen = 0;  // to follow you through respawns and map rotations

@@ -1,6 +1,7 @@
 // avatar.js — remote soldiers: model, nametag, snapshot interpolation.
 import * as THREE from 'three';
 import { makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, disposeObject, setCrouch } from './entities.js';
+import { sfx } from './audio.js';
 
 export class Avatar {
   constructor(parent, team, name) {
@@ -68,6 +69,13 @@ export class Avatar {
     const speed = this.pos.distanceTo(new THREE.Vector3(nx, ny, nz)) * 10;
     this.pos.set(nx, ny, nz);
     this.group.position.copy(this.pos);
+    // Footsteps off the interpolated ground truth: 2.2 blocks of travel, one
+    // step sound where they actually are.
+    if (this.alive && this._px !== undefined) {
+      this._stepAcc = (this._stepAcc ?? 0) + Math.hypot(nx - this._px, nz - this._pz);
+      if (this._stepAcc >= 2.2) { this._stepAcc = 0; sfx.at('step', this.pos); }
+    }
+    this._px = nx; this._pz = nz;
 
     if (!this.alive) { // corpse: tumble where it fell, then vanish
       if (this.deadAt !== null) animateDeath(this.parts, performance.now() / 1000 - this.deadAt);

@@ -160,12 +160,20 @@ no jump needed (sprinting past them stays flat, so a charge doesn't become
 a free climb) · `Space` jump/swim · `Shift` sprint · `CTRL` crouch (slower,
 steadier aim, and a ledge grip: crouch-walking refuses to step off any drop
 taller than one block, though single steps still pass so slopes stay walkable)
+— and crouch *while sprinting* to slide: a fast, low, barely-steerable skid
+that jump pops you out of.
 · `LMB` fire/dig/place/throw · `RMB` aim · `1-5` / `Q`·`E` select tool (the
 grenade is slot 5, three per life, one trickles back every 12 s) · `R` reload ·
 `TAB` scoreboard · `T` / `Y` chat the room / your team · `Esc` pause (in a
 match: resume or back to the main menu). Kills and deaths are tracked all
 round — hold `TAB` for the live table, and the end screen closes every match
-with everyone's K, D, and K/D. Death costs 10 seconds on the redeploy timer, for humans and
+with everyone's K, D, and K/D. Fresh spawns get two seconds of protection —
+it drains twice as fast while you move and vanishes the moment you fire, so
+spawn-camping dies here but so does hiding in it.
+
+Every sound sits in the world: footsteps, gunfire, and shovels pan to the
+correct ear and fade with distance, so you can hear a fight over the ridge —
+and hear someone tunneling under your feet. Death costs 10 seconds on the redeploy timer, for humans and
 bots alike, so clearing a base actually clears it. A minimap in the top left
 shows the terrain (craters and all), both flag stands and the live position of
 each flag (or the hill ring, tinted by who holds it and flashing white while

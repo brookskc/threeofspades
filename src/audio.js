@@ -19,6 +19,13 @@ function noiseBuffer() {
   return (_noise = buf);
 }
 
+// Positional audio: the game sets the listener pose once per frame, then
+// sfx.at('dig', pos) pans/attenuates the named sound by bearing and range.
+// _pan/_scale are set for the duration of one sfx call, then reset.
+let listener = null; // { x, y, z, rx, rz } — position + unit right vector
+let _pan = 0, _scale = 1;
+export function setListener(l) { listener = l; }
+
 // Filtered noise burst — the backbone of gunshots, digs, explosions.
 function burst({ dur = 0.15, freq = 1200, q = 1, gain = 0.5, decay = 12 }) {
   if (!ctx) return;
@@ -27,9 +34,14 @@ function burst({ dur = 0.15, freq = 1200, q = 1, gain = 0.5, decay = 12 }) {
   const f = ctx.createBiquadFilter();
   f.type = 'lowpass'; f.frequency.value = freq; f.Q.value = q;
   const g = ctx.createGain();
-  g.gain.setValueAtTime(gain, ctx.currentTime);
+  g.gain.setValueAtTime(gain * _scale, ctx.currentTime);
   g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-  src.connect(f).connect(g).connect(master);
+  src.connect(f).connect(g);
+  if (_pan) { // one StereoPanner per audible burst: cheap at our voice counts
+    const p = ctx.createStereoPanner();
+    p.pan.value = _pan;
+    g.connect(p).connect(master);
+  } else g.connect(master);
   src.start();
   src.stop(ctx.currentTime + dur + 0.05);
 }
@@ -42,9 +54,14 @@ function tone({ freq = 440, dur = 0.12, type = 'square', gain = 0.2, slide = 0, 
   o.frequency.setValueAtTime(freq, t0);
   if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t0 + dur);
   const g = ctx.createGain();
-  g.gain.setValueAtTime(gain, t0);
+  g.gain.setValueAtTime(gain * _scale, t0);
   g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-  o.connect(g).connect(master);
+  o.connect(g);
+  if (_pan) {
+    const p = ctx.createStereoPanner();
+    p.pan.value = _pan;
+    g.connect(p).connect(master);
+  } else g.connect(master);
   o.start(t0);
   o.stop(t0 + dur + 0.05);
 }
@@ -65,4 +82,19 @@ export const sfx = {
   lose:      () => [392, 330, 262].forEach((f, i) => tone({ freq: f, dur: 0.22, type: 'triangle', gain: 0.25, delay: i * 0.14 })),
   respawn:   () => tone({ freq: 440, dur: 0.1, type: 'triangle', gain: 0.2, slide: 220 }),
   click:     () => tone({ freq: 700, dur: 0.04, type: 'square', gain: 0.1 }),
+  step:      () => burst({ dur: 0.05, freq: 550 + Math.random() * 250, gain: 0.16 }),
+  slide:     () => burst({ dur: 0.32, freq: 620, gain: 0.3, q: 0.7 }),
+  // Positional variant: sfx.at('step', {x,y,z}) pans by bearing off the
+  // listener's right ear and fades with distance; past 70 blocks, silence.
+  at(name, pos) {
+    if (!ctx || !listener || !this[name]) return;
+    const dx = pos.x - listener.x, dy = (pos.y ?? listener.y) - listener.y,
+          dz = pos.z - listener.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d > 70) return;
+    _pan = d < 1.5 ? 0 : Math.max(-0.9, Math.min(0.9, (dx * listener.rx + dz * listener.rz) / d));
+    _scale = 1 / (1 + d * 0.09);
+    this[name]();
+    _pan = 0; _scale = 1;
+  },
 };

@@ -414,6 +414,7 @@ export class Bot {
     this.body.vel.set(0, 0, 0);
     this.health = 100;
     this.alive = true;
+    this.protT = 2; // same spawn protection humans get
     this.ammo = GUN.mag;
     this.stuck = 0;
     this.sampleT = 0.4;

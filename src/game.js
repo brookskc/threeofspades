@@ -6,7 +6,7 @@ import { generateMap, BASE, MAPS, mapsForMode } from './mapgen.js';
 import { Player, TOOLS } from './player.js';
 import { Bot } from './bots.js';
 import { Effects } from './effects.js';
-import { sfx } from './audio.js';
+import { sfx, setListener } from './audio.js';
 import { Body, disposeObject } from './entities.js';
 import { Avatar } from './avatar.js';
 
@@ -127,7 +127,8 @@ const hud = {
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';
-    $('healthnum').textContent = Math.max(0, Math.ceil(p.health)) + ' HP';
+    $('healthnum').textContent = Math.max(0, Math.ceil(p.health)) + ' HP'
+      + (p.protT > 0 ? ' · SAFE' : '');
     $('healthfill').style.background = p.health > 40
       ? 'linear-gradient(90deg,#5db85d,#8fd98f)' : 'linear-gradient(90deg,#c0392b,#e74c3c)';
   },
@@ -513,6 +514,7 @@ class RemoteProxy {
     this.blocks = 50;
     this.nades = 3;
     this.nadeRegen = 0;
+    this.protT = 2; // spawn protection, host-enforced
     this.game.net.sendTo(this.id, { t: 'e', k: 'spawn', x: p.x, y: p.y, z: p.z });
   }
 }
@@ -699,6 +701,7 @@ export class Game {
 
   // ---------------- combat ----------------
   fireHitscan(shooter, from, dir, spec) {
+    shooter.protT = 0; // firing drops spawn protection
     // Crouch steadies aim; iron sights steady it more (rifle ×0.5, SMG ×0.7 —
     // the SMG keeps its close-range identity, the rifle owns aimed mid-range).
     const spread = (spec.spread ?? 0) * (shooter.crouched ? 0.35 : 1)
@@ -728,11 +731,11 @@ export class Game {
         : from.clone().addScaledVector(d, RANGE);
     const muzzle = from.clone().addScaledVector(d, 1.2).add(new THREE.Vector3(0, -0.12, 0));
     const hex = voxel ? PALETTE[this.world.get(voxel.x, voxel.y, voxel.z)].color : 0;
-    this.shotFx(muzzle, end, !!hit, hex, from);
+    this.shotFx(muzzle, end, !!hit, hex, from, spec.key);
 
     if (this.mode === 'host') {
       this.net.broadcast({ t: 'e', k: 'shot', sid: shooter.isRemote ? shooter.id : 'HOST',
-        f: arr(muzzle), e: arr(end), hit: !!hit, hex });
+        f: arr(muzzle), e: arr(end), hit: !!hit, hex, gun: spec.key });
     }
 
     if (hit) {
@@ -760,18 +763,21 @@ export class Game {
     this.effects.blockBurst([{ x, y, z, v }]);
   }
 
-  // Tracer + impact particles + report sound (shared by local sim and net replay).
-  shotFx(muzzle, end, hit, hex, from) {
+  // Tracer + impact particles + report sound (shared by local sim and net
+  // replay). Gunfire is positional: the report pans by bearing and fades
+  // with range, so you can hear where a fight is. Your own muzzle (within
+  // 2 blocks of your ear) already played its sound locally.
+  shotFx(muzzle, end, hit, hex, from, kind = 'smg') {
     this.effects.tracer(muzzle, end);
     if (hit) this.effects.burst(end, 10, 0xc0392b, 4);
     else if (hex) this.effects.burst(end, 6, hex, 3);
-    if (from.distanceTo(this.player.body.pos) < 55 &&
-        from.distanceToSquared(this.player.body.eye()) > 4) sfx.smg();
+    if (from.distanceToSquared(this.player.body.eye()) > 4) sfx.at(kind, muzzle);
   }
 
   // Player tool entry points — route locally (solo/host) or to the host (client).
   requestShoot(p, t) {
     if (this.mode !== 'client') return this.fireHitscan(p, p.body.eye(), p.lookDir(), t);
+    p.protT = 0; // firing drops spawn protection (the host drops its copy too)
     const from = p.body.eye(), dir = p.lookDir();
     const vox = this.world.raycast(from, dir, 130);
     const end = vox
@@ -790,6 +796,7 @@ export class Game {
     this.net.send({ t: 'a', k: 'place', o: arr(p.body.eye()), d: arr(p.lookDir()) });
   }
   requestNade(p) {
+    p.protT = 0; // throwing is firing, as far as spawn protection is concerned
     if (this.mode !== 'client') return this.throwGrenade(p, p.body.eye(), p.lookDir(), 13);
     this.net.send({ t: 'a', k: 'nade', o: arr(p.body.eye()), d: arr(p.lookDir()) });
   }
@@ -835,6 +842,7 @@ export class Game {
   }
 
   damage(victim, amount, attacker) {
+    if (victim.protT > 0) return; // spawn protection: brief, breaks on fire
     if (!victim.alive || this.over) return;
     victim.health -= amount;
     victim.alert?.(attacker); // bots whirl toward whoever shot them
@@ -969,8 +977,11 @@ export class Game {
       this.player.blocks = Math.min(99, this.player.blocks + 1);
       sfx.dig();
       hud.refreshTool(this.player);
-    } else if (who.isRemote) {
-      who.blocks = Math.min(99, who.blocks + 1);
+    } else {
+      // Someone else's shovel: audible where it happens — tunneling is a
+      // stealth tradeoff, not free silence.
+      sfx.at('dig', { x, y, z });
+      if (who.isRemote) who.blocks = Math.min(99, who.blocks + 1);
     }
   }
 
@@ -1020,6 +1031,7 @@ export class Game {
 
   // ---------------- grenades ----------------
   throwGrenade(owner, origin, dir, speed) {
+    owner.protT = 0; // covers proxy throws arriving via the host action path
     this.grenades.push({
       pos: origin.clone().addScaledVector(dir, 0.5),
       vel: dir.clone().multiplyScalar(speed).add(new THREE.Vector3(0, 2.5, 0)),
@@ -1547,7 +1559,7 @@ export class Game {
         break;
       }
       case 'shot':
-        if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f));
+        if (d.sid !== this.myId) this.shotFx(v3(d.f), v3(d.e), d.hit, d.hex, v3(d.f), d.gun);
         break;
       case 'feed': hud.feed(safeFeedHtml(d.html)); break;
       case 'msg':
@@ -1605,6 +1617,21 @@ export class Game {
       this._respawnT -= dt;
       if (this._respawnT > 0) hud.respawn(this._respawnT);
     }
+    // Own footsteps + cosmetic protection countdown (the host's copy is the
+    // one that actually gates damage); everyone else steps via Avatar.update.
+    {
+      const p = this.player, b = p.body;
+      const moved = p._sx === undefined ? 0 : Math.hypot(b.pos.x - p._sx, b.pos.z - p._sz);
+      p._sx = b.pos.x; p._sz = b.pos.z;
+      if (p.protT > 0) {
+        p.protT = Math.max(0, p.protT - dt * (moved > dt * 2 ? 2 : 1));
+        hud.health(p);
+      }
+      if (p.alive && b.onGround) {
+        p._stepAcc = (p._stepAcc ?? 0) + moved;
+        if (p._stepAcc >= 2.2) { p._stepAcc = 0; sfx.step(); }
+      }
+    }
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
     for (const av of this.avatars.values()) av.update(this.time);
@@ -1640,11 +1667,39 @@ export class Game {
     this.time += dt;
     this.world.animateSky(this.time);
     hud.minimap(this);
+    // Positional audio hears from the player's ear, right vector included.
+    {
+      const p = this.player, e = p.body.eye();
+      setListener({ x: e.x, y: e.y, z: e.z, rx: Math.sin(p.yaw), rz: Math.cos(p.yaw) });
+    }
     if (this.mode === 'client') { this._clientUpdate(dt); this.world.flushDirty(); return; }
 
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);
     for (const b of this.bots) b.update(dt);
+
+    // Footsteps + spawn-protection drain, from actual ground covered:
+    // every 2.2 blocks of grounded travel sounds a step where they are, and
+    // moving burns protection twice as fast as standing (firing ends it
+    // outright — see fireHitscan/throwGrenade).
+    for (const e of this.entities()) {
+      if (!e?.alive || !e.body) continue;
+      const b = e.body;
+      if (e._sx === undefined) { e._sx = b.pos.x; e._sz = b.pos.z; e._stepAcc = 0; continue; }
+      const moved = Math.hypot(b.pos.x - e._sx, b.pos.z - e._sz);
+      e._sx = b.pos.x; e._sz = b.pos.z;
+      if (e.protT > 0) {
+        e.protT = Math.max(0, e.protT - dt * (moved > dt * 2 ? 2 : 1));
+        if (e === this.player) hud.health(e); // live SAFE indicator
+      }
+      if (!b.onGround) continue;
+      e._stepAcc += moved;
+      if (e._stepAcc >= 2.2) {
+        e._stepAcc = 0;
+        if (e === this.player) sfx.step();       // your own feet: centered
+        else sfx.at('step', b.pos);              // everyone else: placed
+      }
+    }
 
     // Respawns.
     for (const [e, t] of this.respawnTimers) {
