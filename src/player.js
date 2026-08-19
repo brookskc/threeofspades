@@ -627,6 +627,7 @@ export class Player {
   // fraction of HALF the screen height it projects to at the current zoom.
   _updateScopeNotches(aiming) {
     const el = this._notchEl ??= document.getElementById('scopeNotches');
+    const vignette = this._vignetteEl ??= document.getElementById('scopeVignette');
     if (!el) return;
     const spec = TOOLS[this.tool];
     const scoped = aiming && spec.key === 'sniper' && this.aimK > 0.85;
@@ -637,6 +638,7 @@ export class Player {
     // point) takes over.
     if (this._scopeParts) for (const m of this._scopeParts) m.visible = !scoped;
     el.classList.toggle('on', scoped);
+    vignette?.classList.toggle('on', scoped);
     if (!scoped) return;
     if (!this._notchTicks) {
       this._notchTicks = NOTCH_RANGES.map(r => {

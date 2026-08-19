@@ -612,7 +612,20 @@ export class Bot {
           // own spread (scaled by hold time and skill, same as a human
           // tightening up) be the only randomness.
           const spec = TOOLS[this.gunClass];
-          const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
+          // Aim at CENTER MASS, not the eye. body.eye() is the exact
+          // center of the head hitbox — literally the same formula
+          // rayVsSoldier uses for its own head sphere — so aiming there
+          // was landing a headshot on essentially every on-target shot:
+          // spread this tight, at a typical engagement range, deviates far
+          // less than the head sphere's own angular size covers. Harmless
+          // under the bot's old, weak custom gun (a 27dmg headshot barely
+          // mattered); a real weapon's headshot (110-247dmg) turned "bots
+          // aim precisely at the head by default" into bots aimbot-sniping
+          // every fight. Headshots now come from spread landing high, the
+          // way they should, not from being the default aim point.
+          const aimAt = new THREE.Vector3(this.target.body.pos.x,
+            this.target.body.pos.y + this.target.body.half.h * 0.5, this.target.body.pos.z);
+          const aim = new THREE.Vector3().subVectors(aimAt, from).normalize();
           const held = Math.min(1, (this.aimT - reactT) / 1.0); // 0 fresh -> 1 well-aimed
           const spreadMul = (1.8 - 1.3 * held) / this.skill;
           g.fireHitscan(this, from, aim, { ...spec, spread: spec.spread * spreadMul });

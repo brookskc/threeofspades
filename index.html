@@ -156,13 +156,24 @@
   #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
     width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.9);
     box-shadow:0 0 4px rgba(0,0,0,.8); }
-  /* Sniper scope notches — calibrated range marks below the crosshair,
-     shown only scoped in with the sniper (see Player#_updateScopeNotches).
-     Positions are computed in JS each frame (they depend on viewport size
-     and the sniper's own zoom), so these rules are sizing/look only. */
+  /* Sniper scope: a center reticle (a real "0 range" reference — the
+     regular crosshair dot already fades out fully aimed, same as the
+     rifle/smg iron sights, so without this there was NOTHING marking
+     where the camera is actually pointed) plus calibrated range marks
+     below it, plus a circular vignette for the "looking through glass"
+     read. Notch positions are computed in JS each frame (they depend on
+     viewport size and the sniper's own zoom) — these rules are sizing/look
+     only. See Player#_updateScopeNotches. */
+  #scopeVignette { position:fixed; inset:0; pointer-events:none; opacity:0;
+    background:radial-gradient(circle at center, transparent 0 42vh, #000 46vh);
+    transition:opacity .15s; z-index:7; }
+  #scopeVignette.on { opacity:1; }
   #scopeNotches { position:absolute; left:50%; top:50%; transform:translateX(-50%);
     display:none; pointer-events:none; }
   #scopeNotches.on { display:block; }
+  #scopeNotches .center { position:absolute; left:50%; top:0;
+    transform:translate(-50%,-50%); width:6px; height:6px;
+    background:rgba(255,255,255,.95); box-shadow:0 0 4px rgba(0,0,0,.9); }
   #scopeNotches .tick { position:absolute; left:50%; transform:translate(-50%,-50%);
     width:22px; height:2px; background:rgba(255,255,255,.75); }
   #scopeNotches .tick::after { content:attr(data-r); position:absolute;
@@ -252,7 +263,9 @@
   <div id="vignette"></div>
 
   <div id="hud">
-    <div id="crosshair"></div><div id="hitmark"></div><div id="scopeNotches"></div>
+    <div id="scopeVignette"></div>
+    <div id="crosshair"></div><div id="hitmark"></div>
+    <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>
     <canvas id="minimap" width="192" height="192"></canvas>
