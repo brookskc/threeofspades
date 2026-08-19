@@ -14,11 +14,17 @@ import { stats } from './stats.js';
 // imperceptible at that distance for any real firearm. Lower = more drop:
 // the SMG's slower round punishes trying to snipe with it far more than it
 // ever affects its real, close-range job.
+// punch: per-shot camera-shake strength (Player#_useTool's this.recoil) —
+// separate from kick/climb, which is aim DRIFT across shots, not a single
+// jolt. Used to be hardcoded to "rifle gets 0.9, everything else gets
+// 0.35"; data-driven now so the sniper (1.0, the max the clamp allows) can
+// actually feel like the heaviest gun in the game rather than being lumped
+// in with the SMG.
 export const TOOLS = [
   { key: 'rifle', name: 'RIFLE', damage: 55, headMult: 2, interval: 0.55, spread: 0.0012,
-    mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5, dropVel: 410 },
+    mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5, dropVel: 410, punch: 0.9 },
   { key: 'smg', name: 'SMG', damage: 22, headMult: 1.6, interval: 0.1, spread: 0.02,
-    mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7, dropVel: 225 },
+    mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7, dropVel: 225, punch: 0.35 },
   { key: 'spade', name: 'SPADE', interval: 0.3 },
   { key: 'block', name: 'BLOCK', interval: 0.18 },
   { key: 'nade', name: 'GRENADE', interval: 0.8 },
@@ -28,7 +34,7 @@ export const TOOLS = [
   // in the game: a clean headshot at range is a real kill (90*2.75=247.5,
   // comfortably over 100hp); a body hit alone (90) isn't automatic.
   { key: 'sniper', name: 'SNIPER', damage: 90, headMult: 2.75, interval: 1.25, spread: 0.0006,
-    mag: 5, reload: 3.0, auto: false, zoom: 4, kick: 0.04, aimSpread: 0.3, dropVel: 290 },
+    mag: 5, reload: 3.0, auto: false, zoom: 4, kick: 0.04, aimSpread: 0.3, dropVel: 290, punch: 1.0 },
 ];
 // Which TOOLS slots are "class" guns for the one-gun-per-life restriction —
 // spade/block/nade stay universally available regardless of class.
@@ -89,6 +95,21 @@ export class Player {
 
     this._buildViewmodel();
     this._bind(dom);
+  }
+
+  // A plain accessor rather than a property write: the block viewmodel is
+  // built once at construction and then just sits there for the rest of
+  // the session, but team can change AFTER that — an initial coin flip, a
+  // guest's welcome message, and now a full swap on every map rotation.
+  // Every one of those is a plain `this.player.team = x` assignment
+  // somewhere else in the codebase; routing them all through this setter
+  // means the held block recolors automatically no matter which of those
+  // paths changed it, rather than needing each call site to separately
+  // remember to also recolor a material.
+  get team() { return this._team; }
+  set team(t) {
+    this._team = t;
+    this._blockMat?.color.setHex(t === 'blue' ? 0x4a6cd4 : 0x4a9e4a);
   }
 
   // ---------------- input ----------------
@@ -155,8 +176,8 @@ export class Player {
         }
         return;
       }
-      if (e.code >= 'Digit1' && e.code <= 'Digit6')
-        this._selectTool(Number(e.code.slice(-1)) - 1);
+      if (e.code >= 'Digit1' && e.code <= 'Digit4')
+        this._selectTool(this._toolSlots()[Number(e.code.slice(-1)) - 1]);
       if (e.code === 'KeyQ' || e.code === 'KeyE') // cycle back / forward
         this._cycleTool(e.code === 'KeyE' ? 1 : -1);
       // A real gun has a mag; spade/block/nade don't — checking for that
@@ -193,6 +214,16 @@ export class Player {
     addEventListener('contextmenu', e => e.preventDefault());
   }
 
+  // Logical belt slots: 1=your class gun, 2=spade, 3=block, 4=grenade —
+  // always 4 keys regardless of which gun you're carrying. The class
+  // system means there's only ever ONE gun in the belt, so it should
+  // always live on the same key rather than moving depending on which of
+  // the three you picked (it used to sit on 1, 2, or 6 depending on class,
+  // which is exactly the kind of thing that reads as broken under stress).
+  _toolSlots() {
+    return [this.gunClass, 2, 3, 4];
+  }
+
   _selectTool(i) {
     if (i === this.tool) return;
     // Class-locked for the life: the other two guns simply aren't in the
@@ -206,15 +237,14 @@ export class Player {
     this.game.hud.refreshTool(this);
   }
 
-  // Q/E cycling has to SKIP forbidden gun slots rather than land on one and
-  // silently do nothing — landing on a locked slot and just refusing would
-  // read as "the key didn't work," not "that weapon isn't available."
+  // Cycles through the SAME 4 logical slots the digit keys use. No need to
+  // skip anything now — _toolSlots() only ever contains available tools by
+  // construction, unlike raw TOOLS indices which include the two forbidden
+  // guns.
   _cycleTool(dir) {
-    let i = this.tool;
-    for (let n = 0; n < TOOLS.length; n++) {
-      i = (i + dir + TOOLS.length) % TOOLS.length;
-      if (!GUN_CLASSES.includes(i) || i === this.gunClass) { this._selectTool(i); return; }
-    }
+    const slots = this._toolSlots();
+    const i = Math.max(0, slots.indexOf(this.tool));
+    this._selectTool(slots[(i + dir + slots.length) % slots.length]);
   }
 
   _reload() {
@@ -253,7 +283,9 @@ export class Player {
     const dark = new THREE.MeshBasicMaterial({ color: stats.gunColor() });
     this._gunMat = dark; // kept for live recoloring when the menu changes it mid-session
     const wood = new THREE.MeshBasicMaterial({ color: 0x6b4a2c });
-    const green = new THREE.MeshBasicMaterial({ color: 0x4a9e4a });
+    const blockMat = new THREE.MeshBasicMaterial({
+      color: this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a });
+    this._blockMat = blockMat; // live-recolored by the team setter below
     const skin = new THREE.MeshBasicMaterial({ color: 0xd9a066 });
     const mk = (w, h, d, mat, x, y, z, parent) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -334,7 +366,7 @@ export class Player {
     this.vm.spade = spade;
 
     const block = new THREE.Group();
-    mk(0.16, 0.16, 0.16, green, 0, 0, -0.3, block);
+    mk(0.16, 0.16, 0.16, blockMat, 0, 0, -0.3, block);
     mk(0.05, 0.1, 0.06, skin, 0, -0.12, -0.2, block);
     this.vm.block = block;
 
@@ -505,7 +537,7 @@ export class Player {
     if (t.key === 'nade') return this._throwGrenade();
     if (this.ammo[this.tool] <= 0) { sfx.click(); return this._reload(); }
     this.ammo[this.tool]--;
-    this.recoil = Math.min(1, this.recoil + (t.key === 'rifle' ? 0.9 : 0.35));
+    this.recoil = Math.min(1, this.recoil + (t.punch ?? 0.35));
     sfx[t.key]();
     // Fire FIRST, then kick: the shot leaves along the aim you had when you
     // squeezed, and the climb only taxes the FOLLOW-UP shots. (Applying the

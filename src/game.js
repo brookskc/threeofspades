@@ -193,7 +193,7 @@ const hud = {
     else $('ammo').innerHTML = p.reloading > 0
       ? `<small>reloading…</small>`
       : `${p.ammo[p.tool]} <small>/ ${t.mag}</small>`;
-    $('toolhint').textContent = `Q·E / 1–6 weapons · CTRL crouch · R reload`;
+    $('toolhint').textContent = `Q·E / 1–4 weapons · CTRL crouch · R reload`;
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';

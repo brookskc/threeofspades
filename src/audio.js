@@ -69,6 +69,14 @@ function tone({ freq = 440, dur = 0.12, type = 'square', gain = 0.2, slide = 0, 
 export const sfx = {
   rifle:     () => { burst({ dur: 0.22, freq: 900,  gain: 0.7 }); tone({ freq: 140, dur: 0.1, type: 'sawtooth', gain: 0.25, slide: -90 }); },
   smg:       () => { burst({ dur: 0.1,  freq: 1400, gain: 0.45 }); tone({ freq: 200, dur: 0.06, type: 'square', gain: 0.12, slide: -120 }); },
+  // Deeper, longer, louder than the rifle — a bolt-action round should read
+  // as more powerful, not just a variant of the same bang. This entry
+  // didn't exist when the sniper was added: sfx[t.key]() in player.js
+  // indexes this object by the weapon's key with no fallback, so firing
+  // the sniper threw (sfx.sniper is not a function) and aborted BEFORE
+  // reaching either requestShoot or the aim-climb line — silent, no shot,
+  // no felt recoil, all from the one missing entry.
+  sniper:    () => { burst({ dur: 0.35, freq: 550, gain: 0.85 }); tone({ freq: 90, dur: 0.18, type: 'sawtooth', gain: 0.35, slide: -120 }); },
   dig:       () => burst({ dur: 0.08, freq: 500, gain: 0.5 }),
   crumble:   () => { burst({ dur: 0.45, freq: 260, gain: 0.6 }); tone({ freq: 90, dur: 0.4, type: 'sawtooth', gain: 0.2, slide: -40 }); },
   place:     () => tone({ freq: 300, dur: 0.06, type: 'triangle', gain: 0.25, slide: 120 }),
