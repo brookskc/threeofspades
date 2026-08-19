@@ -9,7 +9,10 @@ const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
   green: ['Sarge', 'Pine', 'Moss', 'Flint', 'Clover', 'Briar'],
 };
-const GUN = { damage: 16, headMult: 1.5, interval: 0.14, spread: 0.035, mag: 24, reload: 2.0 };
+const GUN = { damage: 18, headMult: 1.5, interval: 0.12, spread: 0.035, mag: 24, reload: 2.0 };
+// ~150 theoretical dps, up from ~114 — closer to the player SMG's ~220 without
+// matching it outright. Bots were losing straight fights on paper before a
+// single shot missed.
 
 // Difficulty tiers scale reaction time, aim error and target memory.
 // ?botq=easy|hard skews the whole room; every bot still gets its own jitter.
@@ -58,6 +61,7 @@ export class Bot {
     this.digT = 0;             // tunneling swing cooldown
     this.lastDig = -9;         // last shovel swing, game time
     this.blocks = 16;          // combat engineering inventory (cover + bridges)
+    this._cover = [];          // recently self-built columns: {x,z,t} — don't shovel our own wall
     this.buildT = 0;           // cooldown between throwing up cover
     this.coverT = 0;           // hold-and-fight timer behind fresh cover
     this.duckT = 0;            // duck rhythm: reloads and burst pauses
@@ -240,7 +244,11 @@ export class Bot {
       }
     }
     const bridging = g.time - this.lastBridge < 0.9;
-    const dest = (this.responding || bridging || rimAhead) ? goal.clone() : goal.clone().add(
+    // Responders, bridgelayers, and rim-climbers beeline on purpose (see the
+    // comment above) — the new obstacle-routing below leaves them alone and
+    // lets them walk (or dig) straight at their target, same as always.
+    const beeline = this.responding || bridging || rimAhead;
+    const dest = beeline ? goal.clone() : goal.clone().add(
       b.inWater ? this.wander.clone().multiplyScalar(0.25) : this.wander);
 
     // Dry-land seeking: swimming or wading the shelf, steer for the nearest
@@ -342,11 +350,15 @@ export class Bot {
     // team-colored masonry overhead, which the collapse system can drop on us.
     // A retreating bot never holds: the wall it just threw up is for falling
     // back BEHIND, not for standing next to.
-    if (this.coverT > 0 && this.target && this.retreatT <= 0 && !this._overhead())
-      dir.multiplyScalar(0.15);
+    const coverHold = this.coverT > 0 && this.target && this.retreatT <= 0 && !this._overhead();
+    if (coverHold) dir.multiplyScalar(0.15);
     // Holding a ranged firing line: plant the feet while crouch-firing.
-    if (this.target && foeD > 18 && this.aimT > reactT && this.coverT <= 0 &&
-        !undermining && b.onGround && !b.inWater) dir.multiplyScalar(0.15);
+    const holdingLine = this.target && foeD > 18 && this.aimT > reactT && this.coverT <= 0 &&
+        !undermining && b.onGround && !b.inWater;
+    if (holdingLine) dir.multiplyScalar(0.15);
+    // Deliberately near-motionless, either from cover or a held line — the
+    // stuck-sampler below must not read discipline as being wedged.
+    const holding = coverHold || holdingLine;
 
     // --- terrain negotiation: tunnel level, stair-step uphill, hop steps ---
     // The passage ahead is two voxels high at foot level; whatever of it is
@@ -359,6 +371,28 @@ export class Bot {
     // sheer bank could only bob there forever.
     this.digT -= dt;
     const w = g.world, fy = Math.floor(b.pos.y);
+    // Route around a short obstacle before ever reaching for the shovel: try
+    // a couple of headings off the direct line, and steer that way if one's
+    // clear. There is no pathfinding in this file — a straight line is the
+    // only route a bot ever considers — so without this, ANY solid terrain
+    // between a bot and its goal (a hillside, a stand of trees, a single
+    // wall) got dug through rather than walked around, on every map, as the
+    // routine way bots made progress rather than a rare fallback. The
+    // deliberate beeline cases (responding, bridging, mid rim-climb) and the
+    // deliberate dig cases (a committed water exit, undermining a tower)
+    // keep going straight at their target on purpose — this only touches the
+    // ordinary "walking somewhere and a wall is in the way" case.
+    if (!beeline && !b.inWater && this.wetT <= 0 && !undermining && dir.lengthSq() > 0.01) {
+      const blocked = w.solid(Math.floor(b.pos.x + dir.x * 1.2), fy, Math.floor(b.pos.z + dir.z * 1.2))
+        || w.solid(Math.floor(b.pos.x + dir.x * 1.2), fy + 1, Math.floor(b.pos.z + dir.z * 1.2));
+      if (blocked) for (const deg of [30, -30, 60, -60]) {
+        const rad = deg * Math.PI / 180;
+        const rx = dir.x * Math.cos(rad) - dir.z * Math.sin(rad);
+        const rz = dir.x * Math.sin(rad) + dir.z * Math.cos(rad);
+        const px = Math.floor(b.pos.x + rx * 1.4), pz = Math.floor(b.pos.z + rz * 1.4);
+        if (!w.solid(px, fy, pz) && !w.solid(px, fy + 1, pz)) { dir.set(rx, 0, rz).normalize(); break; }
+      }
+    }
     // Probe the contact column first, then a step beyond: a bot pressed
     // against the face is closer than shovel reach, and both columns block.
     let tx = 0, tz = 0, lo = false, hi = false;
@@ -369,6 +403,11 @@ export class Bot {
       if (lo || hi) { tx = px; tz = pz; break; }
       lo = hi = false;
     }
+    // Never shovel down the wall we ourselves threw up moments ago —
+    // without this a bot repositioning through its own fresh cover reads it
+    // as just another obstacle and digs it back out, burning the block
+    // budget it spent seconds earlier for nothing.
+    const ownCover = this._cover.some(c => c.x === tx && c.z === tz && g.time - c.t < 8);
     // Combat suppresses digging on land (fight first), but a swimmer pressed
     // against a bank climbs even mid-fight: bobbing in the creek is a worse
     // look than pausing fire to shovel.
@@ -381,7 +420,13 @@ export class Bot {
     // look — combat only pauses digging on open ground.
     // Undermining counts as wedged-in work: shoveling out a tower's legs is
     // worth pausing fire for, same as climbing a bank.
-    if ((!this.target || b.inWater || this.stuck >= 1 || undermining)
+    // activelyFiring is the hard stop: a bot that's actually landing shots
+    // never breaks off to swing a shovel over an unrelated stuck sample
+    // (undermining and swimming are the deliberate exceptions — those ARE
+    // the fight).
+    const activelyFiring = this.target && this.aimT > reactT && !undermining && !b.inWater;
+    if (!activelyFiring && !ownCover
+        && (!this.target || b.inWater || this.stuck >= 1 || undermining)
         && (dist > 2 || b.inWater || this.exit || undermining)
         && this.digT <= 0 && (lo || hi) && (b.onGround || b.inWater)) {
       this.digT = 0.32;
@@ -453,7 +498,7 @@ export class Bot {
     // Bots sprint too: unengaged and with somewhere to be, they run nearly
     // as fast as a sprinting player (5.4 × 1.45). Combat drops to a walk.
     const speed = (b.inWater ? (digging ? 1.4 : 3.2)
-      : this.target ? 3.4
+      : this.target ? 5.0          // close to patrol pace — a fight is not a standing trade
       : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
       : this.responding ? 6.2      // urgency: our flag is on the ground
       : 6.0) * (cautious ? 0.45 : 1);
@@ -475,7 +520,13 @@ export class Bot {
       // dist>2 alone would never flag a bot pressed against its committed
       // exit wall (the wall IS the dest), so a wedged climb counts too —
       // but not mid-swing: a dig-climb is horizontal-stationary by nature.
-      this.stuck = moved < 0.5 && (dist > 2 || this.exit) && !digging ? this.stuck + 1 : 0;
+      // A bot that's holding position on purpose (crouched behind cover,
+      // planted for a ranged shot) used to trip this the same as one truly
+      // wedged against terrain: after ~1.6s it would launch itself into a
+      // jump loop and then abandon the position for a random wander,
+      // self-sabotaging the exact fight it was winning. Discipline isn't
+      // stuck.
+      this.stuck = !holding && moved < 0.5 && (dist > 2 || this.exit) && !digging ? this.stuck + 1 : 0;
       this.lastPos.copy(b.pos);
     }
     if (this.stuck >= 1 && !(digging && hi)) b.jump();
@@ -536,12 +587,19 @@ export class Bot {
           const burstPause = Math.random() < 0.25;
           this.cooldown = GUN.interval * (burstPause ? 4 : 1); // burst rhythm
           if (burstPause && this.coverT > 0) this.duckT = this.cooldown + 0.15;
-          const err = Math.max(0.015, (0.2 - this.aimT * 0.16) / this.skill);
+          // One randomization source, not two stacked ones: this used to
+          // hand-jitter the aim vector AND let fireHitscan add GUN.spread on
+          // top of that, every shot. Worse, the manual jitter shrank toward
+          // a floor with aimT while GUN.spread never did — so a bot that had
+          // held a target for two full seconds was still only as accurate as
+          // the weapon's fixed spread allowed, and "holding aim longer" never
+          // actually paid off the way the numbers implied it should. Aim
+          // precisely and let the weapon's own spread (scaled by hold time
+          // and skill, same as a human tightening up) be the only randomness.
           const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
-          aim.x += (Math.random() - .5) * err * 2;
-          aim.y += (Math.random() - .5) * err;
-          aim.z += (Math.random() - .5) * err * 2;
-          g.fireHitscan(this, from, aim.normalize(), GUN);
+          const held = Math.min(1, (this.aimT - reactT) / 1.0); // 0 fresh -> 1 well-aimed
+          const spreadMul = (1.8 - 1.3 * held) / this.skill;
+          g.fireHitscan(this, from, aim, { ...GUN, spread: GUN.spread * spreadMul });
         }
       }
     }
@@ -569,16 +627,21 @@ export class Bot {
     // The flag thief gets no psychic outline: he is seen by the same eyes as
     // everyone else — in front of you, or close enough to hear.
     const to = new THREE.Vector3();
-    let best = null, bestD = 48;
+    let best = null, bestScore = 48;
     for (const f of this.game.foesOf(this.team)) {
       if (!f.alive) continue;
       const d = this.body.pos.distanceTo(f.body.pos);
-      if (d >= bestD) continue;
+      if (d >= 48) continue;
       if (f !== this.target) { // a target already being tracked stays tracked
         to.subVectors(f.body.pos, this.body.pos).setY(0).normalize();
         if (d > 7 && this.face.dot(to) < 0.26) continue; // outside the ~150° cone
       }
-      if (this.game.losClear(this.body.eye(), f.body.eye())) { best = f; bestD = d; }
+      // Distance is the baseline, but a flag carrier or someone already hurt
+      // is worth reaching past a merely-nearer foe for — press an advantage
+      // instead of restarting the fight on whoever's a step closer.
+      const score = d - (f.carrier ? 20 : 0) - (100 - f.health) * 0.15;
+      if (score >= bestScore) continue;
+      if (this.game.losClear(this.body.eye(), f.body.eye())) { best = f; bestScore = score; }
     }
     return best;
   }
@@ -610,14 +673,19 @@ export class Bot {
   _build(toFoe) {
     const b = this.body, fy = Math.floor(b.pos.y), w = this.game.world;
     const perp = new THREE.Vector3(-toFoe.z, 0, toFoe.x);
-    let placed = 0;
+    const placed = [];
     for (const off of [-1, 0, 1]) {
       const cx = Math.floor(b.pos.x + toFoe.x * 2.2 + perp.x * off);
       const cz = Math.floor(b.pos.z + toFoe.z * 2.2 + perp.z * off);
       const gy = w.solid(cx, fy - 1, cz) ? fy : w.solid(cx, fy - 2, cz) ? fy - 1 : null;
-      if (gy !== null && this.game.tryBuild(this, cx, gy, cz)) placed++;
+      if (gy !== null && this.game.tryBuild(this, cx, gy, cz)) placed.push([cx, cz]);
     }
-    if (placed) { this.buildT = 9; this.coverT = 6; }
+    if (placed.length) {
+      this.buildT = 9; this.coverT = 6;
+      const now = this.game.time;
+      this._cover = this._cover.filter(c => now - c.t < 8)
+        .concat(placed.map(([x, z]) => ({ x, z, t: now })));
+    }
   }
 
   die(killer) {

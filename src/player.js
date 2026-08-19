@@ -58,7 +58,6 @@ export class Player {
   // ---------------- input ----------------
   _bind(dom) {
     addEventListener('keydown', e => {
-      if (e.repeat) return;
       // Typing beats game keys — but only where typing makes sense: the
       // chat box, or a lobby widget while the menu is actually up. The menu
       // fades out with opacity (still laid out), so a callsign box left
@@ -79,13 +78,33 @@ export class Player {
       // browser UI, which yanks pointer lock and pops the cursor + menu
       // mid-fight; Space on a focused button clicks it; Space scrolls.
       // Browser shortcuts (Ctrl/Meta/Alt, F-keys) stay reachable.
+      //
+      // This has to run on every repeat event, not just the first press —
+      // macOS shows its press-and-hold accent popup (ẃ ŵ ẅ...) on a letter
+      // key the moment the page stops preventing default on the REPEATED
+      // keydowns a held key generates, even if the initial press was
+      // prevented. Returning early on e.repeat (as this used to) meant every
+      // WASD hold handed its repeats straight to the OS text layer.
       if (document.pointerLockElement === dom
           && !e.ctrlKey && !e.metaKey && !e.altKey && !/^F\d{1,2}$/.test(e.code))
         e.preventDefault();
       this.keys[e.code] = true;
+      if (e.repeat) return; // one-shot actions below: only on the initial press
       // TAB scoreboard works while dead too — the redeploy wait is exactly
-      // when you want it. preventDefault keeps browser focus in the page.
-      if (e.code === 'Tab') { e.preventDefault(); this.game.hud.statsShow(this.game); return; }
+      // when you want it. preventDefault keeps browser focus in the page —
+      // though Tab (and its sibling Shift+Tab) can still force pointer lock
+      // itself closed on some browsers as an unblockable accessibility
+      // escape hatch that no preventDefault stops. main.js's
+      // pointerlockchange handler watches this timestamp to tell that case
+      // apart from an actual Esc/alt-tab and re-lock silently instead of
+      // pausing the match over a keystroke that only meant to check the
+      // score.
+      if (e.code === 'Tab') {
+        e.preventDefault();
+        this.game._tabUnlockAt = performance.now();
+        this.game.hud.statsShow(this.game);
+        return;
+      }
       if (!this.alive) return;
       if (e.code >= 'Digit1' && e.code <= 'Digit5')
         this._selectTool(Number(e.code.slice(-1)) - 1);

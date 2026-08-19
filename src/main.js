@@ -620,11 +620,24 @@ game.onRestart = mapName => {
   status(`new map — <b>${mapName}</b>`);
 };
 
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === renderer.domElement;
-  // While a quick-match search runs, the lock is held behind the searching
-  // ticker — don't start playing until the room is actually ready.
-  if (locked) { if (!(matchmaking && !net)) setPlaying(true); return; }
+// Tab (and Shift+Tab) can force pointer lock closed on some browsers as an
+// unblockable accessibility escape hatch — the keydown handler's
+// preventDefault cannot stop it, confirmed by the fact this file already
+// had to work around a "Tab keyup lost to the unlock" stranding the
+// scoreboard. If that's what just happened mid-match, the player almost
+// certainly meant "let me check the score," not "pause the game" — try to
+// silently re-acquire the lock instead of dropping into the pause menu.
+// pointerlockerror is the failure path: some browsers throttle back-to-back
+// lock requests, and if this one is refused we fall back to a normal pause
+// rather than stranding the player with no UI at all.
+let tabRelockPending = false;
+document.addEventListener('pointerlockerror', () => {
+  if (!tabRelockPending) return;
+  tabRelockPending = false;
+  enterPause();
+});
+
+function enterPause() {
   // Drop all held inputs so nobody runs/shoots blind while the menu is up.
   game.player.keys = {};
   game.player.mouseDown = [false, false, false];
@@ -643,6 +656,19 @@ document.addEventListener('pointerlockchange', () => {
     else showPlay('RESUME');
     suppressResume = false;
   }
+}
+
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  // While a quick-match search runs, the lock is held behind the searching
+  // ticker — don't start playing until the room is actually ready.
+  if (locked) { tabRelockPending = false; if (!(matchmaking && !net)) setPlaying(true); return; }
+  if (playing && performance.now() - (game._tabUnlockAt ?? 0) < 200) {
+    tabRelockPending = true;
+    renderer.domElement.requestPointerLock();
+    return;
+  }
+  enterPause();
 });
 
 addEventListener('resize', () => {
