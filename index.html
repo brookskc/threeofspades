@@ -174,8 +174,19 @@
   #scopeNotches .center { position:absolute; left:50%; top:0;
     transform:translate(-50%,-50%); width:6px; height:6px;
     background:rgba(255,255,255,.95); box-shadow:0 0 4px rgba(0,0,0,.9); }
-  #scopeNotches .tick { position:absolute; left:50%; transform:translate(-50%,-50%);
-    width:22px; height:2px; background:rgba(255,255,255,.75); }
+  /* Each notch is two 8px segments with a 6px gap dead center, not one solid
+     22px bar — a solid line would cover exactly the point on the target the
+     notch exists to line up with. The gap is what a real BDC/mil reticle
+     does for the same reason: hold over, but still see what you're holding
+     over onto. .tick itself is the left segment; ::before draws the right
+     one, positioned relative to .tick's own left edge (14px = 8px segment +
+     6px gap, landing it flush after the gap); ::after is still the range
+     label, unaffected by any of this. */
+  #scopeNotches .tick { position:absolute; left:50%; top:0;
+    transform:translate(-11px,-50%); width:8px; height:2px;
+    background:rgba(255,255,255,.75); }
+  #scopeNotches .tick::before { content:''; position:absolute; left:14px; top:0;
+    width:8px; height:2px; background:rgba(255,255,255,.75); }
   #scopeNotches .tick::after { content:attr(data-r); position:absolute;
     left:26px; top:50%; transform:translateY(-50%); font-size:10px;
     letter-spacing:1px; color:rgba(255,255,255,.6); white-space:nowrap; }
