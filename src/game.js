@@ -2089,6 +2089,7 @@ export class Game {
   _clientDied() {
     this.player.alive = false;
     this._respawnT = 10; // mirrors the host's human redeploy timer
+    this.player.resetZoom(); // same reason as Player.die() — this is the guest's equivalent of it
     // A GUEST's own death never goes through Player.die() at all — the host
     // tells us we're dead over the wire and we land here instead. Without
     // this, joining a match instead of hosting it was the one situation

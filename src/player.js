@@ -566,6 +566,7 @@ export class Player {
     this.body.half.h = 1.75;
     this.swing = 0;
     this.vmRoot.visible = false; // no floating gun while down
+    this.resetZoom(); // don't die scoped in — the death camera shouldn't render through a sniper scope
     // Bots and remote players already burst apart on death (see their die()
     // methods) — your own death was the one case that never called this,
     // since it went straight to deathCam with no particle effect at all.
@@ -573,6 +574,20 @@ export class Player {
     sfx.hurt();
     this.game.hud.classPick(this._pendingClass); // show the current pick before any key is pressed
     this.game.onDeath(this, killer);
+  }
+
+  // The FOV-easing (and the scope notch/vignette overlay it drives) lives
+  // entirely inside update(), which stops running the instant you die —
+  // nothing else would ever bring it back to normal, so dying while zoomed
+  // in left the death camera (and the flycam after it) rendering through
+  // whatever FOV you happened to be holding at the exact instant you died.
+  // No easing here on purpose: you're dead, there's no "smoothly" un-aim a
+  // scope you can no longer use.
+  resetZoom() {
+    this.camera.fov = BASE_FOV;
+    this.camera.updateProjectionMatrix();
+    this.aiming = false;
+    this._updateScopeNotches(false); // un-hides the scope body/lens, hides the notch overlay + vignette
   }
 
   // First-person death: crumple to the dirt with a roll, then a free-roam
