@@ -612,14 +612,18 @@ export class Player {
       return;
     }
 
-    // Free roam: fly through space for the rest of the wait. No collision,
-    // no gravity — W/S move along the full look direction (so looking up
-    // and holding W climbs, same convention a spectator cam usually uses),
-    // A/D strafe horizontally only, same as normal movement. SPACE/CTRL add
-    // pure vertical for when you're not looking straight up or down. SHIFT
-    // doubles speed. Clamped to the world's bounds with a margin — not to
-    // limit where you can look, just so it's hard to fly into the void and
-    // lose your bearings for the rest of the wait.
+    // Free roam: fly through space for the rest of the wait, with real
+    // voxel collision — no clipping through the floor or a wall, though
+    // you can still slide along one, since each axis is moved and checked
+    // independently rather than freezing the whole move the instant ANY
+    // component would clip something. W/S move along the full look
+    // direction (so looking up and holding W climbs, same convention a
+    // spectator cam usually uses), A/D strafe horizontally only, same as
+    // normal movement. SPACE/CTRL add pure vertical for when you're not
+    // looking straight up or down. SHIFT doubles speed. World-bounds
+    // clamping stays on top of the voxel collision — that catches flying
+    // off the EDGE of the map into open sky, which has no terrain to
+    // collide with in the first place.
     if (!this._flyPos) {
       const eye = this.body.eye();
       this._flyPos = new THREE.Vector3(eye.x, eye.y - 1.2, eye.z);
@@ -637,11 +641,26 @@ export class Player {
     if (wish.lengthSq() > 0) wish.normalize();
     const shift = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
     const speed = 9 * (shift ? 2 : 1);
-    this._flyPos.addScaledVector(wish, speed * dt);
-    this._flyPos.x = Math.max(-8, Math.min(SX + 8, this._flyPos.x));
-    this._flyPos.y = Math.max(-8, Math.min(SY + 24, this._flyPos.y));
-    this._flyPos.z = Math.max(-8, Math.min(SZ + 8, this._flyPos.z));
-    this.camera.position.copy(this._flyPos);
+    // A small cube (all 8 corners checked) around the point rather than a
+    // single-pixel test — cheap regardless (a handful of voxel lookups,
+    // once a frame, for one entity, not a hot path) and keeps the near
+    // clip plane from dipping into geometry at a glancing angle, without
+    // needing the full body-sized hitbox a real entity's collision uses.
+    const R = 0.4, world = this.game.world;
+    const blocked = (x, y, z) => {
+      for (const ox of [-R, R]) for (const oy of [-R, R]) for (const oz of [-R, R])
+        if (world.solid(x + ox, y + oy, z + oz)) return true;
+      return false;
+    };
+    const p = this._flyPos;
+    const dx = wish.x * speed * dt, dy = wish.y * speed * dt, dz = wish.z * speed * dt;
+    if (!blocked(p.x + dx, p.y, p.z)) p.x += dx;
+    if (!blocked(p.x, p.y + dy, p.z)) p.y += dy;
+    if (!blocked(p.x, p.y, p.z + dz)) p.z += dz;
+    p.x = Math.max(-8, Math.min(SX + 8, p.x));
+    p.y = Math.max(-8, Math.min(SY + 24, p.y));
+    p.z = Math.max(-8, Math.min(SZ + 8, p.z));
+    this.camera.position.copy(p);
     this.camera.rotation.set(this.pitch, this.yaw - Math.PI / 2, 0, 'YXZ');
   }
 
