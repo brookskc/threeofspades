@@ -280,8 +280,16 @@ export class Player {
     // that's genuinely yours: nothing here rides the network, so it's
     // exactly what YOU see when you look at your own gun, not something
     // shown off to anyone else.
+    //
+    // dark is deliberately gun-only (rifle/smg/sniper barrels + sights) —
+    // toolDark is a SEPARATE, fixed material for the spade and grenade at
+    // the same default color. Both used to be the same shared material,
+    // which meant unlocking "gold" or "crimson" silently recolored the
+    // spade blade and the entire grenade too — well past what "gun colors"
+    // was ever pitched as.
     const dark = new THREE.MeshBasicMaterial({ color: stats.gunColor() });
     this._gunMat = dark; // kept for live recoloring when the menu changes it mid-session
+    const toolDark = new THREE.MeshBasicMaterial({ color: 0x2b2b30 });
     const wood = new THREE.MeshBasicMaterial({ color: 0x6b4a2c });
     const blockMat = new THREE.MeshBasicMaterial({
       color: this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a });
@@ -362,7 +370,7 @@ export class Player {
 
     const spade = new THREE.Group();
     mk(0.035, 0.035, 0.5, wood, 0, 0, -0.25, spade);     // handle
-    mk(0.12, 0.16, 0.03, dark, 0, 0, -0.52, spade);      // blade
+    mk(0.12, 0.16, 0.03, toolDark, 0, 0, -0.52, spade);  // blade — fixed color, not a "gun"
     this.vm.spade = spade;
 
     const block = new THREE.Group();
@@ -371,8 +379,8 @@ export class Player {
     this.vm.block = block;
 
     const nade = new THREE.Group();
-    mk(0.09, 0.11, 0.09, dark, 0, 0, -0.3, nade);        // body
-    mk(0.03, 0.05, 0.03, dark, 0, 0.07, -0.3, nade);     // spoon
+    mk(0.09, 0.11, 0.09, toolDark, 0, 0, -0.3, nade);    // body — fixed color, not a "gun"
+    mk(0.03, 0.05, 0.03, toolDark, 0, 0.07, -0.3, nade); // spoon
     mk(0.05, 0.1, 0.06, skin, 0, -0.1, -0.22, nade);     // hand
     this.vm.nade = nade;
 
