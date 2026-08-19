@@ -634,6 +634,11 @@ export class Game {
     this.effects = new Effects(scene);
     this.bots = [];                        // before Player: its first spawnPoint reads these
     this.player = new Player(this, camera, dom);
+    // A solo/host session's own team was always green — every fight from
+    // the same base, the same side of every map, permanently. Coin-flipped
+    // once here so hosting (or playing solo) doesn't mean owning one side
+    // forever; _rotate() flips it again on every map change from here on.
+    if (this.mode !== 'client' && Math.random() < 0.5) this.player.team = 'blue';
     this.player.name = opts.name ?? 'You';
     this.hud = hud;
     this.chat = new Chat(this);
@@ -747,10 +752,20 @@ export class Game {
   _kdSeed() { for (const e of this.entities()) this._kdRow(e); }
 
   _spawnBots() {
-    // 5 a side. The host is always green and takes the 4th slot on its own
-    // team, matching how _hostAddPlayer swaps humans in one for one.
-    for (let i = 0; i < 5; i++) this.bots.push(new Bot(this, 'blue'));
-    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'green'));
+    // 5 a side, filling around whoever's already connected — the host and
+    // any remote players occupy real seats on their own team, bots take
+    // the rest. Reads team membership live rather than assuming "host is
+    // green": that assumption used to be baked in here, which meant a
+    // rotation that swapped the host onto blue (see _rotate) would seed a
+    // full fresh 5 blue bots on TOP of a now-blue host, for 6v4. It also
+    // means this now correctly avoids over-seeding when rebuild() runs on
+    // a map rotation with humans already connected, rather than always
+    // adding a full 9 fresh bots regardless of who was already in the room.
+    const humans = { green: 0, blue: 0 };
+    humans[this.player.team] = (humans[this.player.team] ?? 0) + 1;
+    for (const p of this.remote.values()) humans[p.team] = (humans[p.team] ?? 0) + 1;
+    for (let i = 0; i < 5 - humans.green; i++) this.bots.push(new Bot(this, 'green'));
+    for (let i = 0; i < 5 - humans.blue; i++) this.bots.push(new Bot(this, 'blue'));
   }
 
   enemyOf(team) { return team === 'blue' ? 'green' : 'blue'; }
@@ -1366,6 +1381,16 @@ export class Game {
   _rotate() {
     const map = this._nextMap();
     const seed = Math.floor(Math.random() * 1e9);
+    // Swap green<->blue for everyone before the next map generates. Team
+    // COMPOSITION doesn't change — who's grouped with whom stays put — only
+    // which color/side that group is called. Bases and flag stands never
+    // move, so this is what actually varies which side of the map you play:
+    // last map's green corner is blue's corner this map. Host/solo only —
+    // _rotate never runs on a client; they pick the change up from the
+    // roster broadcast below (see _applyRoster's self-sync).
+    const flip = t => (t === 'blue' ? 'green' : 'blue');
+    this.player.team = flip(this.player.team);
+    for (const p of this.remote.values()) p.team = flip(p.team);
     if (this.mode === 'host')
       this.net.broadcast({ t: 'e', k: 'restart', map, seed });
     this.rebuild(seed, map);
@@ -1744,6 +1769,15 @@ export class Game {
       [row[0], { name: cleanName(row[1]), team: team(row[2]), pid: row[3] }]));
     this._rosterB = new Map((r?.b ?? []).map(row =>
       [row[0], { name: cleanName(row[1]), team: team(row[2]) }]));
+    // A rotation can swap which color you're playing (see _rotate). The
+    // welcome sets this.player.team exactly once, at join — without this a
+    // guest's own team goes stale the moment the host flips it, silently
+    // mislabeling their own chat scope, flag alerts, and avatar friend/foe
+    // coloring for the rest of the match.
+    if (this.mode === 'client' && this.myIdx != null) {
+      const mine = this._rosterP.get(this.myIdx);
+      if (mine) this.player.team = mine.team;
+    }
   }
 
   _replayEdits(log) {
