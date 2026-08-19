@@ -226,16 +226,6 @@ export class Bot {
   }
 
   update(dt) {
-    // Killcam needs somewhere to read a bot's recent position from. Remote
-    // players and other clients' bots already get this for free (Avatar
-    // already keeps a rolling sample window for interpolation) — the one
-    // gap is a host/solo player killed by their OWN bot, which renders
-    // straight from body.pos with no history kept anywhere. This is that
-    // history: position only, no yaw needed (killcam always frames the
-    // death point directly rather than reconstructing an aim angle).
-    this.trail = (this.trail ?? []).filter(s => this.game.time - s[0] < 1.5);
-    this.trail.push([this.game.time, this.body.pos.x, this.body.pos.y, this.body.pos.z]);
-    if (this.trail.length > 20) this.trail.shift();
     if (!this.alive) { // corpse: tumble where it fell, then vanish
       if (this.deadT >= 0 && this.deadT <= 1.4) {
         this.deadT += dt;

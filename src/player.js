@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Body } from './entities.js';
 import { sfx } from './audio.js';
 import { stats } from './stats.js';
+import { SX, SY, SZ } from './world.js';
 
 // kick: degrees of aim climb per shot (recoil). aimSpread: hip-fire spread
 // multiplier while sighted. The SMG's small kick compounds at 10 rounds/s —
@@ -574,73 +575,59 @@ export class Player {
     this.game.onDeath(this, killer);
   }
 
-  // First-person death: a killcam (if one was set — see Game#_startKillcam),
-  // then crumple to the dirt, then settle into a clean free-look for the
-  // rest of the respawn wait.
+  // First-person death: crumple to the dirt with a roll, then a free-roam
+  // fly camera for the rest of the respawn wait — no killcam. That system
+  // kept failing in ways that were hard to pin down without a browser to
+  // reproduce in, and a simple flycam is something that just works: no
+  // trail data, no wire fields, no per-frame math that can throw.
   deathCam(dt) {
-    const kc = this._killcam;
-    if (kc) {
-      // Wrapped defensively: if this math ever throws for ANY reason, the
-      // line that clears _killcam below never runs — which means EVERY
-      // subsequent frame re-enters this same branch and throws again,
-      // permanently freezing the camera for the rest of this life. Neither
-      // the killcam NOR the free-look fallback below it would ever work
-      // again, which is exactly "both are just not working" — the same
-      // failure shape as the sfx.sniper crash a few turns back, just in a
-      // different place. Recovering here means a single bad frame costs
-      // the killcam, not the whole death experience.
-      try {
-        const now = performance.now() / 1000;
-        if (kc.t0 == null) kc.t0 = now;
-        const elapsed = now - kc.t0;
-        const HOLD = 0.35; // linger on the final frame before handing off
-        if (elapsed < kc.span + HOLD) {
-          const trail = kc.trail;
-          const targetT = trail[0][0] + Math.min(elapsed, kc.span);
-          let a = trail[0], b = trail[trail.length - 1];
-          for (let i = 0; i < trail.length - 1; i++) {
-            if (trail[i][0] <= targetT && trail[i + 1][0] >= targetT) { a = trail[i]; b = trail[i + 1]; break; }
-          }
-          const s = b[0] > a[0] ? (targetT - a[0]) / (b[0] - a[0]) : 1;
-          const px = a[1] + (b[1] - a[1]) * s;
-          const py = a[2] + (b[2] - a[2]) * s + 1.57; // foot position + eye height
-          const pz = a[3] + (b[3] - a[3]) * s;
-          // No pitch/yaw for the killer crosses the wire (third-person avatars
-          // don't need it) — frame the death point directly instead of trying
-          // to reconstruct an aim angle from partial data. Math matches
-          // lookDir()'s exact convention: dir.y=sin(pitch), so pitch is
-          // atan2(dy, horizontal); dir.x=cos(pitch)cos(yaw) and
-          // dir.z=-cos(pitch)sin(yaw), so yaw is atan2(-dz, dx).
-          const dx = kc.deathPos.x - px, dy = kc.deathPos.y - py, dz = kc.deathPos.z - pz;
-          const pitch = Math.atan2(dy, Math.hypot(dx, dz));
-          const yaw = Math.atan2(-dz, dx);
-          if (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz) &&
-              Number.isFinite(pitch) && Number.isFinite(yaw)) {
-            this.camera.position.set(px, py, pz);
-            this.camera.rotation.set(pitch, yaw - Math.PI / 2, 0, 'YXZ');
-            return;
-          }
-          // A NaN slipped through (degenerate trail data) — don't render a
-          // broken frame, just end the killcam early and fall through.
-        }
-      } catch { /* fall through to the crumple below */ }
-      this._killcam = null; // done, or aborted — either way, hand off cleanly
+    this.deadT = Math.min(1.6, this.deadT + dt * 2.4);
+    if (this.deadT < 1.6) {
+      // Crumple, then settle out of the tilt. Mouselook already updates
+      // pitch/yaw with no alive-check anywhere in _bind, which is what
+      // makes both this settle AND the free-roam below actually work.
+      const fall = Math.min(1, this.deadT);
+      const k = fall * fall * (3 - 2 * fall); // 0..1 over the fall
+      const settleT = Math.max(0, Math.min(1, (this.deadT - 1) / 0.6));
+      const settled = settleT * settleT * (3 - 2 * settleT); // 0..1, un-tilting after the fall
+      const eye = this.body.eye();
+      this.camera.position.set(eye.x, eye.y - k * 1.2, eye.z);
+      this.camera.rotation.set(this.pitch + k * 0.3 * (1 - settled),
+        this.yaw - Math.PI / 2, k * 0.5 * (1 - settled), 'YXZ');
+      return;
     }
 
-    // Crumple, then settle into a clean, controllable view. Mouselook
-    // already updates pitch/yaw with no alive-check anywhere in _bind —
-    // the crumple's fixed ~29° roll and pitch offset were never removed
-    // once the fall finished, which is the only reason the respawn wait
-    // looked locked rather than a working free-look.
-    this.deadT = Math.min(1.6, this.deadT + dt * 2.4);
-    const fall = Math.min(1, this.deadT);
-    const k = fall * fall * (3 - 2 * fall); // 0..1 over the fall
-    const settleT = Math.max(0, Math.min(1, (this.deadT - 1) / 0.6));
-    const settled = settleT * settleT * (3 - 2 * settleT); // 0..1, un-tilting after the fall
-    const eye = this.body.eye();
-    this.camera.position.set(eye.x, eye.y - k * 1.2, eye.z);
-    this.camera.rotation.set(this.pitch + k * 0.3 * (1 - settled),
-      this.yaw - Math.PI / 2, k * 0.5 * (1 - settled), 'YXZ');
+    // Free roam: fly through space for the rest of the wait. No collision,
+    // no gravity — W/S move along the full look direction (so looking up
+    // and holding W climbs, same convention a spectator cam usually uses),
+    // A/D strafe horizontally only, same as normal movement. SPACE/CTRL add
+    // pure vertical for when you're not looking straight up or down. SHIFT
+    // doubles speed. Clamped to the world's bounds with a margin — not to
+    // limit where you can look, just so it's hard to fly into the void and
+    // lose your bearings for the rest of the wait.
+    if (!this._flyPos) {
+      const eye = this.body.eye();
+      this._flyPos = new THREE.Vector3(eye.x, eye.y - 1.2, eye.z);
+    }
+    const dir = this.lookDir();
+    const f = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    const r = new THREE.Vector3(-f.z, 0, f.x);
+    const wish = new THREE.Vector3();
+    if (this.keys['KeyW']) wish.add(dir);
+    if (this.keys['KeyS']) wish.sub(dir);
+    if (this.keys['KeyD']) wish.add(r);
+    if (this.keys['KeyA']) wish.sub(r);
+    if (this.keys['Space']) wish.y += 1;
+    if (this.keys['ControlLeft'] || this.keys['ControlRight']) wish.y -= 1;
+    if (wish.lengthSq() > 0) wish.normalize();
+    const shift = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+    const speed = 9 * (shift ? 2 : 1);
+    this._flyPos.addScaledVector(wish, speed * dt);
+    this._flyPos.x = Math.max(-8, Math.min(SX + 8, this._flyPos.x));
+    this._flyPos.y = Math.max(-8, Math.min(SY + 24, this._flyPos.y));
+    this._flyPos.z = Math.max(-8, Math.min(SZ + 8, this._flyPos.z));
+    this.camera.position.copy(this._flyPos);
+    this.camera.rotation.set(this.pitch, this.yaw - Math.PI / 2, 0, 'YXZ');
   }
 
   // Calibrated range marks below the crosshair — real rangefinding, not
@@ -705,7 +692,7 @@ export class Player {
     this.cooldown = 0;
     this.reloading = 0;
     this.deadT = 0;
-    this._killcam = null; // defensive — should already be cleared, respawn shouldn't have to wait on it
+    this._flyPos = null; // fresh flycam start point next death, not wherever it last was
     this.crouched = false;
     this.body.half.h = 1.75;
     this.vmRoot.visible = true;

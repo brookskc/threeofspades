@@ -603,13 +603,7 @@ class RemoteProxy {
     this.alive = false;
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
-    // Killcam needs to know who to show — the avatar key doubles as the
-    // scoreboard key (_kdKey already produces exactly 'p'+idx / 'b'+idx),
-    // and the name rides along too rather than making the client re-derive
-    // it from a roster lookup that might not still hold that entry.
-    this.game.net.sendTo(this.id, { t: 'e', k: 'died',
-      killer: killer && killer !== this ? this.game._kdKey(killer) : null,
-      killerName: killer?.name ?? null });
+    this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
     this.game.onDeath(this, killer);
   }
   respawn() {
@@ -1093,10 +1087,6 @@ export class Game {
     else this.feed(`${nameSpan(victim)} blew up`);
     // A corpse marks a fight: the fallen's teammates hunt toward it.
     if (killer && killer !== victim) this.pingIntel(victim.body.pos, killer.team);
-    // Our own death, host/solo side — a guest gets the equivalent in
-    // _clientDied, since this method never runs on their machine for it.
-    if (victim === this.player && killer && killer !== victim)
-      this._startKillcam(this._killerTrail(killer), victim.body.pos, killer.name);
 
     // Scoreboard: a death for the fallen, a kill for the killer — suicides
     // and terrain score a death only, same as TDM team scoring below.
@@ -2074,7 +2064,7 @@ export class Game {
         hud.chatMsg({ name: cleanName(d.name), team: d.team === 'blue' ? 'blue' : 'green',
                       text: String(d.text ?? '').slice(0, 120), scope: d.scope });
         break;
-      case 'died': this._clientDied(d.killer, d.killerName); break;
+      case 'died': this._clientDied(); break;
       case 'spawn':
         this.player.respawn({ x: d.x, y: d.y, z: d.z });
         hud.respawn(0); hud.health(this.player); hud.refreshTool(this.player);
@@ -2096,42 +2086,7 @@ export class Game {
     }
   }
 
-  // Killcam data source for a given killer: RemoteProxy already has this for
-  // free (the host pushes every position update into .avatar.samples, same
-  // mechanism a client uses to interpolate them); Bot needed its own small
-  // trail (see bots.js) since host/solo renders its own bots straight from
-  // body.pos with no history kept anywhere else.
-  _killerTrail(killer) {
-    if (!killer) return null;
-    if (killer.isRemote) return killer.avatar.samples;
-    if (killer.trail) return killer.trail;
-    return null;
-  }
-
-  // Replay the killer's recent movement, camera always framed on where we
-  // died. No pitch ever crosses the wire for a remote entity (third-person
-  // avatars don't need it), so rather than half-reconstruct an aim angle
-  // from partial data, this frames the death point directly — simpler, and
-  // it still reads as "here's where that came from." Plays back whatever
-  // history actually exists at roughly real speed rather than stretching a
-  // short trail to fill a fixed duration, which would just look like an
-  // unearned slow-motion replay.
-  _startKillcam(trail, deathPos, killerName) {
-    // Wrapped defensively: this runs inline inside onDeath/_clientDied,
-    // both of which have real work AFTER this call (scoreboard, stats,
-    // HUD) — a throw here must not be able to take any of that down too.
-    try {
-      if (!trail || trail.length < 2) return false;
-      const span = trail[trail.length - 1][0] - trail[0][0];
-      if (span < 0.25) return false; // too little history for a cutscene to mean anything
-      this.player._killcam = { trail: trail.slice(), deathPos: deathPos.clone(),
-        t0: null, span: Math.min(span, 1.4) };
-      if (killerName) hud.message(`KILLED BY ${killerName.toUpperCase()}`, '#e05a4e');
-      return true;
-    } catch { return false; }
-  }
-
-  _clientDied(killerKey, killerName) {
+  _clientDied() {
     this.player.alive = false;
     this._respawnT = 10; // mirrors the host's human redeploy timer
     // A GUEST's own death never goes through Player.die() at all — the host
@@ -2145,8 +2100,6 @@ export class Game {
     hud.damage();
     hud.respawn(10);
     hud.classPick(this.player._pendingClass); // show the current pick before any key is pressed
-    const av = killerKey ? this.avatars.get(killerKey) : null;
-    if (av) this._startKillcam(av.samples, this.player.body.pos, killerName);
   }
 
   // Menu-open clients skip update() entirely (the frame loop freezes their
