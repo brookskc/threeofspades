@@ -17,6 +17,36 @@ const NAMES = {
 // is gone now that they carry one of those same three guns instead.
 const randomClass = () => GUN_CLASSES[Math.floor(Math.random() * GUN_CLASSES.length)];
 
+// How a bot fights, keyed by which of the three guns it's carrying this
+// life. Rifle is the existing baseline (every number here is what the
+// engagement logic already used, unparameterized) — sniper and smg pull
+// away from it toward "long-range specialist" and "close-quarters
+// aggressor" rather than every bot fighting identically regardless of
+// what's in its hands.
+//   hold: foeD above which a bot holds position and crouch-fires, instead
+//     of closing. 999 effectively disables holding — smg never plants its
+//     feet at range, it closes or strafes.
+//   strafe: foeD below which a bot weaves side to side in a firefight
+//     instead of standing and trading. Low for sniper (only as an
+//     absolute last resort with someone already on top of it), high for
+//     smg (readily fights, and moves, at closer range than rifle would).
+//   retreatHealth: health that triggers falling back toward home.
+//   closeRetreat: sniper-only — falls back if a target closes inside this
+//     range regardless of health, since CQB is bad for it no matter how
+//     healthy it is. null for rifle/smg: they don't disengage on range.
+//   speedMul: in-combat movement speed multiplier (patrol/advance speed is
+//     unaffected — this is specifically "how fast do I move once I'm in a
+//     fight," not a general athleticism stat).
+//   groupRange: how close a teammate has to be, past midfield with no
+//     target, to NOT go cautious (see the "Group up" comment below). Small
+//     for sniper (rarely satisfied — won't push forward alone), large for
+//     smg (almost always satisfied — rushes ahead of the pack readily).
+const CLASS_PROFILE = {
+  0: { hold: 18, strafe: 14, retreatHealth: 35, closeRetreat: null, speedMul: 1.0, groupRange: 18 },
+  1: { hold: 999, strafe: 24, retreatHealth: 20, closeRetreat: null, speedMul: 1.12, groupRange: 40 },
+  5: { hold: 30, strafe: 8, retreatHealth: 45, closeRetreat: 14, speedMul: 0.92, groupRange: 8 },
+};
+
 // Difficulty tiers scale reaction time, aim error and target memory.
 // ?botq=easy|hard skews the whole room; every bot still gets its own jitter.
 const QUERY = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
@@ -214,6 +244,7 @@ export class Bot {
       return;
     }
     const g = this.game, b = this.body;
+    const profile = CLASS_PROFILE[this.gunClass];
 
     // --- pick something to shoot (it has to actually see it first) ---
     const seen = this._acquire();
@@ -324,7 +355,7 @@ export class Bot {
         dir.subVectors(this.target.body.pos, b.pos).setY(0).normalize();
       } else if (this.aimT > 0.3) {
         toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
-        if (foeD < 14) {
+        if (foeD < profile.strafe) {
           const side = new THREE.Vector3(-toFoe.z, 0, toFoe.x).multiplyScalar(Math.sin(g.time * 1.7 + this.name.length) > 0 ? 1 : -1);
           dir.multiplyScalar(0.4).add(side.multiplyScalar(0.6)).normalize();
         }
@@ -333,8 +364,14 @@ export class Bot {
 
     // Wounded and engaged: fall back toward home for a beat (still shooting),
     // throwing a wall up behind us if there's cover to make. Then re-engage.
+    // Sniper adds a second trigger: closing inside closeRetreat disengages
+    // regardless of health, since CQB is bad for it no matter how healthy
+    // it is — rifle/smg leave closeRetreat null, so only health matters
+    // for them, unchanged from before.
     this.retreatT -= dt; this.retreatCd -= dt;
-    if (this.target && this.health < 35 && this.retreatCd <= 0 && toFoe) {
+    if (this.target && this.retreatCd <= 0 && toFoe &&
+        (this.health < profile.retreatHealth ||
+         (profile.closeRetreat != null && foeD < profile.closeRetreat))) {
       this.retreatT = 2.5; this.retreatCd = 9;
     }
     if (this.retreatT > 0 && toFoe) {
@@ -344,9 +381,12 @@ export class Bot {
     }
 
     // --- combat engineering: caught in the open at range, throw up a
-    // knee-high wall toward the threat, then fight from behind it ---
+    // knee-high wall toward the threat, then fight from behind it. Skipped
+    // for smg: an aggressor that stops mid-push to build a wall isn't
+    // aggressive, and turtling up contradicts the whole point of carrying
+    // a close-range gun in the first place.
     this.buildT -= dt; this.coverT -= dt; this.duckT -= dt;
-    if (this.target && !this.carrier && !this.responding && toFoe &&
+    if (this.gunClass !== 1 && this.target && !this.carrier && !this.responding && toFoe &&
         b.onGround && !b.inWater && this.blocks >= 3 && this.buildT <= 0 &&
         this.coverT <= 0) {
       if (foeD > 8 && foeD < 42 && !this._hasCover(toFoe)) this._build(toFoe);
@@ -367,7 +407,7 @@ export class Bot {
     const coverHold = this.coverT > 0 && this.target && this.retreatT <= 0 && !this._overhead();
     if (coverHold) dir.multiplyScalar(0.15);
     // Holding a ranged firing line: plant the feet while crouch-firing.
-    const holdingLine = this.target && foeD > 18 && this.aimT > reactT && this.coverT <= 0 &&
+    const holdingLine = this.target && foeD > profile.hold && this.aimT > reactT && this.coverT <= 0 &&
         !undermining && b.onGround && !b.inWater;
     if (holdingLine) dir.multiplyScalar(0.15);
     // Deliberately near-motionless, either from cover or a held line — the
@@ -494,7 +534,10 @@ export class Bot {
 
     // Group up: past midfield with no teammate in sight is how lone bots get
     // picked off. Creep cautiously until the team catches up. Defenders and
-    // responders answer to their own urgency, not this rule.
+    // responders answer to their own urgency, not this rule. groupRange is
+    // per-class: sniper rarely finds a teammate close enough to feel
+    // backed up (won't push forward alone), smg almost always does
+    // (rushes ahead of the pack readily) — see CLASS_PROFILE.
     let cautious = false;
     if (!this.target && !this.carrier && !this.responding && this.role !== 'defend' && !b.inWater) {
       const over = this.heading > 0 ? b.pos.x > SX / 2 : b.pos.x < SX / 2;
@@ -502,7 +545,7 @@ export class Bot {
         cautious = true;
         for (const m of g.entities())
           if (m !== this && m.alive && m.team === this.team &&
-              m.body.pos.distanceTo(b.pos) < 18) { cautious = false; break; }
+              m.body.pos.distanceTo(b.pos) < profile.groupRange) { cautious = false; break; }
       }
     }
 
@@ -510,9 +553,13 @@ export class Bot {
     // its own shovel cadence (~1 block per swing) and never sits at a bank
     // face long enough to clear the ledge — the creek-bobbing loop.
     // Bots sprint too: unengaged and with somewhere to be, they run nearly
-    // as fast as a sprinting player (5.4 × 1.45). Combat drops to a walk.
+    // as fast as a sprinting player (5.4 × 1.45). Combat drops to a walk —
+    // scaled by speedMul there specifically: patrol/response urgency is the
+    // same for everyone, but how briskly a bot moves ONCE IN A FIGHT is
+    // part of its class identity (smg presses in, sniper repositions with
+    // more deliberation).
     const speed = (b.inWater ? (digging ? 1.4 : 3.2)
-      : this.target ? 5.0          // close to patrol pace — a fight is not a standing trade
+      : this.target ? 5.0 * profile.speedMul // close to patrol pace — a fight is not a standing trade
       : digging || bridging ? 2.2  // shovel/plank pace: never outrun the tool
       : this.responding ? 6.2      // urgency: our flag is on the ground
       : 6.0) * (cautious ? 0.45 : 1);
@@ -558,7 +605,7 @@ export class Bot {
     // steadier spread — same trade the player's crouch makes. Same bounded
     // lerp as the player crouch.
     if (this.reloading > 0 && this.coverT > 0) this.duckT = Math.max(this.duckT, 0.2);
-    let rangeDuck = this.target && foeD > 18 && this.aimT > reactT && b.onGround && !b.inWater;
+    let rangeDuck = this.target && foeD > profile.hold && this.aimT > reactT && b.onGround && !b.inWater;
     if (rangeDuck) {
       // Don't duck blind behind our own knee wall: if the crouched eye can't
       // see the foe but the standing eye can, stand and shoot over it.
