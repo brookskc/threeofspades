@@ -168,6 +168,21 @@ const hud = {
     $('healthfill').style.background = p.health > 40
       ? 'linear-gradient(90deg,#5db85d,#8fd98f)' : 'linear-gradient(90deg,#c0392b,#e74c3c)';
   },
+  // Round trip to the host, piggybacked on traffic that already exists (see
+  // the 'ts' field on the client uplink and its echo in _broadcastSnapshot)
+  // — no separate ping message, no extra round trip. Solo has no network to
+  // measure; the host has no meaningful RTT to itself, so it gets a label
+  // instead of a fabricated number.
+  ping(g) {
+    const el = $('ping');
+    if (!el) return;
+    if (g.mode === 'solo') { el.textContent = ''; el.className = ''; return; }
+    if (g.mode === 'host') { el.textContent = 'HOST'; el.className = ''; return; }
+    const ms = g.pingMs;
+    if (ms == null) { el.textContent = '‥ ms'; el.className = ''; return; }
+    el.textContent = Math.round(ms) + ' ms';
+    el.className = ms > 150 ? 'bad' : ms > 80 ? 'warn' : '';
+  },
   score(g) {
     const next = g.hill
       ? `<span class="g">GREEN ${holdClock(g.captures.green)}</span><span style="opacity:.4">—</span><span class="b">${holdClock(g.captures.blue)} BLUE</span>`
@@ -1373,6 +1388,10 @@ export class Game {
       p.yaw = d.yaw;
       p.crouched = !!d.c;
       p.avatar.push(p.body.pos.x, p.body.pos.y, p.body.pos.z, p.yaw);
+      // Echoed straight back on this connection's next snapshot (see
+      // _broadcastSnapshot) so the client can read its own round trip —
+      // no extra message, just one more number on traffic already flowing.
+      if (Number.isFinite(d.ts)) p._pingTs = d.ts;
     } else if (d.t === 'a' && p.alive && !this.over) {
       if (!finite3(d.o) || !finite3(d.d)) return;
       const o = v3(d.o), dir = v3(d.d).normalize();
@@ -1650,11 +1669,13 @@ export class Game {
   // everything the skipped tick would have.
   _broadcastSnapshot() {
     const snap = this.snapshot();
-    for (const conn of this.net.conns.values()) {
+    for (const [id, conn] of this.net.conns) {
       if (!conn.open) continue;
       if (conn.dataChannel?.bufferedAmount > 64 * 1024) continue;
       const sent = conn._sentRows ??= { p: new Map(), b: new Map() };
       const out = { t: 's', f: snap.f, h: snap.h, c: snap.c, g: snap.g, o: snap.o };
+      const pingTs = this.remote.get(id)?._pingTs;
+      if (pingTs !== undefined) out.ts = pingTs;
       for (const key of ['p', 'b']) {
         const cur = new Set();
         out[key] = [];
@@ -1725,7 +1746,15 @@ export class Game {
         this._applyRoster(d.r);
         this.onWelcome?.();
       }
-    } else if (d.t === 's') this._clientSnapshot(d);
+    } else if (d.t === 's') {
+      // Same EWMA idiom as Avatar's arrival-jitter tracking: smooth rather
+      // than snap, so one late packet doesn't make the corner number jump.
+      if (Number.isFinite(d.ts)) {
+        const rtt = performance.now() - d.ts;
+        this.pingMs = this.pingMs != null ? this.pingMs + 0.2 * (rtt - this.pingMs) : rtt;
+      }
+      this._clientSnapshot(d);
+    }
     else if (d.t === 'e') this._clientEvent(d);
   }
 
@@ -1943,7 +1972,7 @@ export class Game {
       const p = this.player;
       this.net.send({ t: 's', x: p.body.pos.x, y: p.body.pos.y, z: p.body.pos.z,
         yaw: Math.atan2(-Math.cos(p.yaw), Math.sin(p.yaw)), tool: p.tool,
-        c: p.crouched ? 1 : 0 });
+        c: p.crouched ? 1 : 0, ts: performance.now() });
     }
     if (this.flags) for (const team of ['green', 'blue']) this.flags[team].clientUpdate(this.time);
     for (let i = 0; i < this.grenadeMeshes.length; i++) {
@@ -1969,6 +1998,7 @@ export class Game {
     this.time += dt;
     this.world.animateSky(this.time);
     hud.minimap(this);
+    hud.ping(this);
     // The scoreboard mirrors the held key exactly: if a Tab keyup gets lost
     // to a pointer-lock hiccup or a window switch, the overlay can never
     // strand itself over the screen. Runs while dead too (TAB works there).

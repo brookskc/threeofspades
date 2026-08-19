@@ -102,6 +102,12 @@
   #lobbyStatus b { font-size:22px; letter-spacing:6px; color:#fff; }
   #roomcode { left:22px; top:16px; font-size:13px; letter-spacing:2px; display:none; }
   #roomcode b { color:#ffd97a; letter-spacing:4px; }
+  /* Plain corner label, same weight as #mapname — a ping readout is
+     something you glance at, not a panel that competes for attention. */
+  #ping { position:absolute; right:22px; top:16px; font-size:12px;
+    letter-spacing:2px; opacity:.5; text-align:right; }
+  #ping.warn { opacity:.85; color:#ffd97a; }
+  #ping.bad { opacity:.9; color:#e05a4e; }
   /* semi-transparent overview, top left under the room tag; 192px = exactly
      3px per map cell, so the pixelated upscale stays perfectly square */
   #minimap { position:absolute; left:22px; top:48px; width:192px; height:192px;
@@ -216,6 +222,7 @@
   <div id="hud">
     <div id="crosshair"></div><div id="hitmark"></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
+    <div id="ping"></div>
     <canvas id="minimap" width="192" height="192"></canvas>
     <div class="panel" id="vitals">
       <div id="healthbar"><div id="healthfill"></div></div>
