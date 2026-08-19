@@ -580,35 +580,51 @@ export class Player {
   deathCam(dt) {
     const kc = this._killcam;
     if (kc) {
-      const now = performance.now() / 1000;
-      if (kc.t0 == null) kc.t0 = now;
-      const elapsed = now - kc.t0;
-      const HOLD = 0.35; // linger on the final frame before handing off
-      if (elapsed < kc.span + HOLD) {
-        const trail = kc.trail;
-        const targetT = trail[0][0] + Math.min(elapsed, kc.span);
-        let a = trail[0], b = trail[trail.length - 1];
-        for (let i = 0; i < trail.length - 1; i++) {
-          if (trail[i][0] <= targetT && trail[i + 1][0] >= targetT) { a = trail[i]; b = trail[i + 1]; break; }
+      // Wrapped defensively: if this math ever throws for ANY reason, the
+      // line that clears _killcam below never runs — which means EVERY
+      // subsequent frame re-enters this same branch and throws again,
+      // permanently freezing the camera for the rest of this life. Neither
+      // the killcam NOR the free-look fallback below it would ever work
+      // again, which is exactly "both are just not working" — the same
+      // failure shape as the sfx.sniper crash a few turns back, just in a
+      // different place. Recovering here means a single bad frame costs
+      // the killcam, not the whole death experience.
+      try {
+        const now = performance.now() / 1000;
+        if (kc.t0 == null) kc.t0 = now;
+        const elapsed = now - kc.t0;
+        const HOLD = 0.35; // linger on the final frame before handing off
+        if (elapsed < kc.span + HOLD) {
+          const trail = kc.trail;
+          const targetT = trail[0][0] + Math.min(elapsed, kc.span);
+          let a = trail[0], b = trail[trail.length - 1];
+          for (let i = 0; i < trail.length - 1; i++) {
+            if (trail[i][0] <= targetT && trail[i + 1][0] >= targetT) { a = trail[i]; b = trail[i + 1]; break; }
+          }
+          const s = b[0] > a[0] ? (targetT - a[0]) / (b[0] - a[0]) : 1;
+          const px = a[1] + (b[1] - a[1]) * s;
+          const py = a[2] + (b[2] - a[2]) * s + 1.57; // foot position + eye height
+          const pz = a[3] + (b[3] - a[3]) * s;
+          // No pitch/yaw for the killer crosses the wire (third-person avatars
+          // don't need it) — frame the death point directly instead of trying
+          // to reconstruct an aim angle from partial data. Math matches
+          // lookDir()'s exact convention: dir.y=sin(pitch), so pitch is
+          // atan2(dy, horizontal); dir.x=cos(pitch)cos(yaw) and
+          // dir.z=-cos(pitch)sin(yaw), so yaw is atan2(-dz, dx).
+          const dx = kc.deathPos.x - px, dy = kc.deathPos.y - py, dz = kc.deathPos.z - pz;
+          const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+          const yaw = Math.atan2(-dz, dx);
+          if (Number.isFinite(px) && Number.isFinite(py) && Number.isFinite(pz) &&
+              Number.isFinite(pitch) && Number.isFinite(yaw)) {
+            this.camera.position.set(px, py, pz);
+            this.camera.rotation.set(pitch, yaw - Math.PI / 2, 0, 'YXZ');
+            return;
+          }
+          // A NaN slipped through (degenerate trail data) — don't render a
+          // broken frame, just end the killcam early and fall through.
         }
-        const s = b[0] > a[0] ? (targetT - a[0]) / (b[0] - a[0]) : 1;
-        const px = a[1] + (b[1] - a[1]) * s;
-        const py = a[2] + (b[2] - a[2]) * s + 1.57; // foot position + eye height
-        const pz = a[3] + (b[3] - a[3]) * s;
-        // No pitch/yaw for the killer crosses the wire (third-person avatars
-        // don't need it) — frame the death point directly instead of trying
-        // to reconstruct an aim angle from partial data. Math matches
-        // lookDir()'s exact convention: dir.y=sin(pitch), so pitch is
-        // atan2(dy, horizontal); dir.x=cos(pitch)cos(yaw) and
-        // dir.z=-cos(pitch)sin(yaw), so yaw is atan2(-dz, dx).
-        const dx = kc.deathPos.x - px, dy = kc.deathPos.y - py, dz = kc.deathPos.z - pz;
-        const pitch = Math.atan2(dy, Math.hypot(dx, dz));
-        const yaw = Math.atan2(-dz, dx);
-        this.camera.position.set(px, py, pz);
-        this.camera.rotation.set(pitch, yaw - Math.PI / 2, 0, 'YXZ');
-        return;
-      }
-      this._killcam = null; // done — fall through to the crumple below
+      } catch { /* fall through to the crumple below */ }
+      this._killcam = null; // done, or aborted — either way, hand off cleanly
     }
 
     // Crumple, then settle into a clean, controllable view. Mouselook

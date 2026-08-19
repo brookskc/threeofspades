@@ -221,12 +221,21 @@
   #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
     font-size:15px; letter-spacing:2px; opacity:0; }
   /* Class picker: press 1/2/3 while dead to choose your gun for next life —
-     the other two guns simply aren't in the belt this spawn. */
+     the other two guns simply aren't in the belt this spawn. Shared .opt/
+     .picked styling with #startClassPick below (same look, mouse-clickable
+     there instead of keyboard, since the home screen isn't pointer-locked
+     and has a real cursor to click with). */
   #classPick { position:absolute; left:50%; top:64%; transform:translateX(-50%);
     display:flex; gap:18px; font-size:12px; letter-spacing:2px; opacity:0;
     text-transform:uppercase; }
-  #classPick .opt { opacity:.5; }
-  #classPick .opt.picked { opacity:1; color:#ffd97a; }
+  #classPick .opt, #startClassPick .opt { opacity:.5; }
+  #classPick .opt.picked, #startClassPick .opt.picked { opacity:1; color:#ffd97a; }
+  #startClassPick { margin-top:14px; font-size:12px; letter-spacing:2px;
+    text-transform:uppercase; }
+  #startClassPick .lbl { opacity:.5; margin-bottom:4px; }
+  #startClassOpts { display:flex; gap:18px; justify-content:center; }
+  #startClassOpts .opt { cursor:pointer; }
+  #startClassOpts .opt:hover { opacity:.8; }
 
   /* chat — lower left, above the vitals panel */
   #chat { position:absolute; left:22px; bottom:102px; width:380px; max-width:44vw;
@@ -333,6 +342,14 @@
     <div class="prefs home-only" id="statsPanel">
       <div id="statsLine">0 K · 0 D · MATCHES 0 · WINS 0</div>
       <div id="gunColors"></div>
+    </div>
+    <div class="prefs home-only" id="startClassPick">
+      <div class="lbl">starting class</div>
+      <div id="startClassOpts">
+        <span class="opt" data-cls="0">RIFLE</span>
+        <span class="opt" data-cls="1">SMG</span>
+        <span class="opt" data-cls="5">SNIPER</span>
+      </div>
     </div>
     <div id="mapname" class="home-only">now showing — <b>GREENBELT</b></div>
     <div class="controls home-only">

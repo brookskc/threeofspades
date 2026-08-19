@@ -6,6 +6,7 @@ import { SX, SZ } from './world.js';
 import { MAPS } from './mapgen.js';
 import { Net, makeCode, PUBLIC_SLOTS, slotCode } from './net.js';
 import { stats, GUN_COLORS } from './stats.js';
+import { GUN_CLASSES } from './player.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -406,6 +407,33 @@ const mapPref = $('mapPref'), modePref = $('modePref');
     }
   }
   renderStats();
+}
+
+// Starting class — the same choice the death-screen picker offers, just
+// reachable before your first life too, instead of only after you've
+// already died once. Applies directly to the already-constructed Player
+// (game/player exist from page load, before any menu click is possible),
+// the same way a respawn would, since there's no first-deploy path that
+// goes through Player#respawn to pick it up on its own.
+{
+  const opts = document.querySelectorAll('#startClassOpts .opt');
+  function renderStartClass() {
+    for (const el of opts) el.classList.toggle('picked', Number(el.dataset.cls) === game.player.gunClass);
+  }
+  for (const el of opts) {
+    el.addEventListener('click', () => {
+      const idx = Number(el.dataset.cls);
+      if (!GUN_CLASSES.includes(idx)) return;
+      try { localStorage.setItem('tos.class', String(idx)); } catch { /* best effort */ }
+      game.player.gunClass = idx;
+      game.player._pendingClass = idx;
+      game.player.tool = idx;
+      game.player._syncViewmodel();
+      game.hud.refreshTool(game.player);
+      renderStartClass();
+    });
+  }
+  renderStartClass();
 }
 
 // Returns the map index to start the new room on: the pinned map if it's

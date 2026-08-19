@@ -2117,13 +2117,18 @@ export class Game {
   // short trail to fill a fixed duration, which would just look like an
   // unearned slow-motion replay.
   _startKillcam(trail, deathPos, killerName) {
-    if (!trail || trail.length < 2) return false;
-    const span = trail[trail.length - 1][0] - trail[0][0];
-    if (span < 0.25) return false; // too little history for a cutscene to mean anything
-    this.player._killcam = { trail: trail.slice(), deathPos: deathPos.clone(),
-      t0: null, span: Math.min(span, 1.4) };
-    if (killerName) hud.message(`KILLED BY ${killerName.toUpperCase()}`, '#e05a4e');
-    return true;
+    // Wrapped defensively: this runs inline inside onDeath/_clientDied,
+    // both of which have real work AFTER this call (scoreboard, stats,
+    // HUD) — a throw here must not be able to take any of that down too.
+    try {
+      if (!trail || trail.length < 2) return false;
+      const span = trail[trail.length - 1][0] - trail[0][0];
+      if (span < 0.25) return false; // too little history for a cutscene to mean anything
+      this.player._killcam = { trail: trail.slice(), deathPos: deathPos.clone(),
+        t0: null, span: Math.min(span, 1.4) };
+      if (killerName) hud.message(`KILLED BY ${killerName.toUpperCase()}`, '#e05a4e');
+      return true;
+    } catch { return false; }
   }
 
   _clientDied(killerKey, killerName) {
