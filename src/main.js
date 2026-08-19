@@ -322,7 +322,7 @@ function adoptJoin(n, code) {
     if (net === n) { net = null; game.net = null; game.mode = 'solo'; }
     n.handlers.onClose = null; // a polite refusal, not a dropped connection
     n.destroy();
-    status('that room is full — 8 players max');
+    status('that room is full — 10 players max');
     if (playing) bailToMenu();
   };
   game.onWelcome = () => {

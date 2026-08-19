@@ -432,7 +432,7 @@ export class Player {
     this.aiming = false; this.aimK = 0;
     this.health = 100;
     this.alive = true;
-    this.protT = 2; // spawn protection: 2s, drains twice as fast moving, gone if you fire
+    this.protT = 3; // spawn protection: 3s, drains twice as fast moving, gone if you fire
     this.slideT = 0; this.slideCd = 0;
     this.stepK = 0;
     this.ammo = TOOLS.map(t => t.mag ?? 0);

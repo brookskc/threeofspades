@@ -24,13 +24,30 @@ const kothtimeParam = parseInt(QUERY.get('kothtime'), 10);
 const HOLD_LIMIT = Number.isInteger(kothtimeParam) ? Math.max(10, kothtimeParam) : 120;
 const CAP_TIME = 6;
 const REDEPLOY = 10; // seconds back at base after dying — humans and bots alike
+// A client declares the host dead after this much snapshot silence. Chosen
+// against the interval keepalive in main.js: a healthy backgrounded host
+// still steps its sim (and broadcasts) at least every 250ms under normal
+// conditions, and Chrome's documented standard background-timer clamp is
+// ~1Hz — so a genuinely alive host essentially never goes much past 1s
+// silent during the first several minutes of being backgrounded. This
+// gives roughly 2.5x margin over that 1Hz worst case: tight enough to
+// meaningfully speed up real-death detection (was 4000ms), generous enough
+// that ordinary timer jitter shouldn't misfire it. Not tested across real
+// devices/browsers yet — watch for false migrations under real play and
+// adjust. Chrome's separate "intensive throttling" tier (background tabs
+// idle 5+ minutes can drop to ~1 timer/min) will eventually trigger a
+// migration under ANY value here; that's not fixable by tuning this number,
+// and arguably correct — a host who hasn't looked at the game in 5+ minutes
+// mid-match probably should hand off.
+const HOST_SILENT_MS = 2500;
 // A terrain block breaks after BLOCK_HP of weapon damage — gunfire hurts
 // blocks exactly as much as it hurts people (rifle 55 -> 3 shots, SMG 22 ->
 // 7 shots, bot carbine 16 -> 10). The spade still digs in one hit.
 const BLOCK_HP = 150;
-// Hard cap on humans per room (host + guests). Test hook: ?cap=2.
+// Hard cap on humans per room (host + guests): 5v5, matching _spawnBots'
+// per-team target below. Test hook: ?cap=2.
 const capParam = parseInt(QUERY.get('cap'), 10);
-export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(8, Math.max(2, capParam)) : 8;
+export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(10, Math.max(2, capParam)) : 10;
 // Fastest legitimate horizontal movement in the game — not sprint (5.4×1.45
 // ≈ 7.83), the slide burst (player.js sets velocity to exactly 9 on a
 // crouch-cancel). The host clamps a reported position to world bounds and
@@ -576,7 +593,7 @@ class RemoteProxy {
     this.blocks = 50;
     this.nades = 3;
     this.nadeRegen = 0;
-    this.protT = 2; // spawn protection, host-enforced
+    this.protT = 3; // spawn protection, host-enforced
     this.game.net.sendTo(this.id, { t: 'e', k: 'spawn', x: p.x, y: p.y, z: p.z });
   }
 }
@@ -730,8 +747,10 @@ export class Game {
   _kdSeed() { for (const e of this.entities()) this._kdRow(e); }
 
   _spawnBots() {
-    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'blue'));
-    for (let i = 0; i < 3; i++) this.bots.push(new Bot(this, 'green'));
+    // 5 a side. The host is always green and takes the 4th slot on its own
+    // team, matching how _hostAddPlayer swaps humans in one for one.
+    for (let i = 0; i < 5; i++) this.bots.push(new Bot(this, 'blue'));
+    for (let i = 0; i < 4; i++) this.bots.push(new Bot(this, 'green'));
   }
 
   enemyOf(team) { return team === 'blue' ? 'green' : 'blue'; }
@@ -1364,7 +1383,7 @@ export class Game {
       this.net.sendTo(id, { t: 'pong', humans: this.remote.size + 1, max: MAX_HUMANS,
         map: this.mapIndex, mode: this.gameMode,
         g: this.captures.green, b: this.captures.blue,
-        names: [this.player.name, ...[...this.remote.values()].map(p => p.name)].slice(0, 8) });
+        names: [this.player.name, ...[...this.remote.values()].map(p => p.name)].slice(0, MAX_HUMANS) });
       return;
     }
     if (d.t === 'hi') {
@@ -1957,15 +1976,15 @@ export class Game {
   // is never detected.
   clientIdleTick() {
     const silent = this.lastRecv ? performance.now() - this.lastRecv : 0;
-    if (silent > 4000) { this.onHostSilent?.(); return; }
-    // A soft early warning, well before the hard 4s migration trigger. This
-    // game has no client-side prediction for anyone but yourself, so a
-    // silent host doesn't fully freeze the screen — you can still walk and
-    // look around, everyone ELSE just stops moving, which without any
-    // signal reads as "did this break?" rather than "we're about to
-    // recover." Fires once per silence episode; cleared in clientOnData
-    // the instant a snapshot resumes.
-    if (silent > 1500 && !this._unstableShown) {
+    if (silent > HOST_SILENT_MS) { this.onHostSilent?.(); return; }
+    // A soft early warning, at 60% of the hard threshold — well before the
+    // migration trigger. This game has no client-side prediction for anyone
+    // but yourself, so a silent host doesn't fully freeze the screen — you
+    // can still walk and look around, everyone ELSE just stops moving,
+    // which without any signal reads as "did this break?" rather than
+    // "we're about to recover." Fires once per silence episode; cleared in
+    // clientOnData the instant a snapshot resumes.
+    if (silent > HOST_SILENT_MS * 0.6 && !this._unstableShown) {
       this._unstableShown = true;
       hud.message('CONNECTION UNSTABLE…', '#ffd97a');
     }
