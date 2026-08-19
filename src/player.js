@@ -229,10 +229,20 @@ export class Player {
     // so the local y of the aim line is +0.09 — the front post tip AND the
     // rear wing tops both live exactly there (the wings run down flush with
     // the barrel). Line the post up with the target between the wings, fire.
+    // Old notch: post half-width 0.006, wings' inner edges at ±0.018 — a
+    // 0.012 sliver of daylight on EACH side, twice the post's own
+    // half-width. That's a genuinely loose notch: you could be off-center
+    // by a real margin and never see it, which is exactly the kind of
+    // imprecision that gets worse, not better, once holdover for bullet
+    // drop is part of aiming. Thinner post, thinner wings, and a sliver
+    // (0.0015/side) smaller than the post's own half-width — centered now
+    // means centered, not "somewhere in a loose gap." Same top-alignment
+    // invariant as before (post tip and wing tops both land on the y=0.09
+    // aim line) — only the geometry making up that line changed.
     const sights = (g, frontZ, rearZ) => {
-      mk(0.012, 0.055, 0.012, dark, 0, 0.0625, frontZ, g);     // front post
-      mk(0.012, 0.055, 0.03, dark, -0.024, 0.0625, rearZ, g);  // rear wing L
-      mk(0.012, 0.055, 0.03, dark,  0.024, 0.0625, rearZ, g);  // rear wing R
+      mk(0.006, 0.04, 0.012, dark, 0, 0.07, frontZ, g);      // front post
+      mk(0.008, 0.04, 0.03, dark, -0.0085, 0.07, rearZ, g);  // rear wing L
+      mk(0.008, 0.04, 0.03, dark,  0.0085, 0.07, rearZ, g);  // rear wing R
     };
     const rifle = new THREE.Group();
     mk(0.05, 0.07, 0.85, dark, 0, 0, -0.5, rifle);       // barrel
