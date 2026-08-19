@@ -31,6 +31,17 @@ const BLOCK_HP = 150;
 // Hard cap on humans per room (host + guests). Test hook: ?cap=2.
 const capParam = parseInt(QUERY.get('cap'), 10);
 export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(8, Math.max(2, capParam)) : 8;
+// Fastest legitimate horizontal movement in the game — not sprint (5.4×1.45
+// ≈ 7.83), the slide burst (player.js sets velocity to exactly 9 on a
+// crouch-cancel). The host clamps a reported position to world bounds and
+// checks it's finite, but never checked how FAR it moved: a patched client
+// could still teleport anywhere inside those bounds instantly, flag carrier
+// straight to the stand included. MAX_SPEED_SLACK is deliberately generous
+// (3x) so packet jitter or a retransmit after real loss never falsely
+// rejects an honest report — this closes outright teleportation, not a
+// moderate speed-hack sitting under the slack.
+const MAX_SPEED = 9;
+const MAX_SPEED_SLACK = 3;
 const $ = id => document.getElementById(id);
 const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
 // Wire numbers are untrusted: a patched client sending NaN/Infinity coords
@@ -1381,9 +1392,20 @@ export class Game {
     if (d.t === 's') {
       // Finite + bounded: a NaN here poisons every distance check downstream.
       if (![d.x, d.y, d.z, d.yaw].every(Number.isFinite)) return;
-      p.body.pos.set(
-        Math.min(Math.max(d.x, 0), SX), Math.min(Math.max(d.y, -8), SY + 8),
-        Math.min(Math.max(d.z, 0), SZ));
+      const nx = Math.min(Math.max(d.x, 0), SX), ny = Math.min(Math.max(d.y, -8), SY + 8),
+        nz = Math.min(Math.max(d.z, 0), SZ);
+      // Speed cap: reject a horizontal jump an honest client couldn't have
+      // covered since its last accepted report. The reference point is
+      // p.body.pos itself, which respawn/migration restore also write
+      // directly — so a legitimate spawn jump is measured from the FRESH
+      // spawn point (already in body.pos by the time this runs), never the
+      // pre-death position, with no separate reset needed. Height is never
+      // rejected (falling is fast and legitimate); only x/z are gated.
+      const elapsed = Math.max(1 / 60, this.time - (p._lastPosT ?? this.time));
+      const maxDist = MAX_SPEED * MAX_SPEED_SLACK * elapsed;
+      if (Math.hypot(nx - p.body.pos.x, nz - p.body.pos.z) > maxDist) p.body.pos.y = ny;
+      else p.body.pos.set(nx, ny, nz);
+      p._lastPosT = this.time;
       p.tool = d.tool;
       p.yaw = d.yaw;
       p.crouched = !!d.c;
@@ -1716,6 +1738,7 @@ export class Game {
 
   clientOnData(d) {
     this.lastRecv = performance.now(); // host heartbeat (snapshots beat at 15Hz)
+    this._unstableShown = false; // the link's talking again — clear the warning flag
     if (d.t === 'full') return this.onFull?.();
     if (d.t === 'r') return this._applyRoster(d);
     if (d.t === 'w') {
@@ -1933,8 +1956,19 @@ export class Game {
   // world), but the watchdog must keep ticking or a host dropping mid-Esc
   // is never detected.
   clientIdleTick() {
-    if (this.lastRecv && performance.now() - this.lastRecv > 4000)
-      this.onHostSilent?.();
+    const silent = this.lastRecv ? performance.now() - this.lastRecv : 0;
+    if (silent > 4000) { this.onHostSilent?.(); return; }
+    // A soft early warning, well before the hard 4s migration trigger. This
+    // game has no client-side prediction for anyone but yourself, so a
+    // silent host doesn't fully freeze the screen — you can still walk and
+    // look around, everyone ELSE just stops moving, which without any
+    // signal reads as "did this break?" rather than "we're about to
+    // recover." Fires once per silence episode; cleared in clientOnData
+    // the instant a snapshot resumes.
+    if (silent > 1500 && !this._unstableShown) {
+      this._unstableShown = true;
+      hud.message('CONNECTION UNSTABLE…', '#ffd97a');
+    }
   }
 
   _clientUpdate(dt) {

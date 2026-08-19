@@ -483,8 +483,8 @@ $('quickBtn').addEventListener('click', async () => {
       adoptHost(r.net, slotCode(r.slot), { public: true, alreadyOpen: true });
       game.hud.message(`HOSTING PUBLIC ROOM ${r.slot + 1} — PLAYERS WILL DROP IN`, '#ffd97a');
     } else {
-      status(r.kind === 'down'
-        ? 'cannot reach the matchmaking service — check your connection'
+      status(r.kind === 'down' ? 'cannot reach the matchmaking service — check your connection'
+        : r.kind === 'timeout' ? 'matchmaking is taking too long — try again, or HOST a private room'
         : 'all public rooms are full — try again shortly, or HOST a private room');
       bailToMenu();
       return;

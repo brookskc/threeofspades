@@ -216,17 +216,28 @@ export class Net {
   // has room do we claim a dead slot and host it ourselves.
   // Resolves { kind: 'host'|'join', net, slot, welcome? }
   //      or  { kind: 'full-all' } | { kind: 'down' }.
-  static async quickScan(name, timeoutMs = 9000) {
+  // overallMs bounds the WHOLE search. Individual probes/knocks/claims are
+  // each timed at timeoutMs, but they used to chain with nothing capping
+  // the total: a page of rooms that all look open but answer slowly could
+  // walk through up to 8 sequential knocks and 8 sequential claim+knock
+  // pairs, twice over for two pages — technically finite, but on the order
+  // of minutes. Nobody waits minutes; they conclude the game is broken and
+  // leave. The deadline is checked only before each SEQUENTIAL step (the
+  // concurrent probe phase is already bounded by timeoutMs on its own).
+  static async quickScan(name, timeoutMs = 9000, overallMs = 20000) {
     const guest = new Peer();
     const ready = new Promise((res, rej) => {
       guest.on('open', res);
       guest.on('error', rej); // pre-open error = broker unreachable
     });
     try { await ready; } catch { guest.destroy(); return { kind: 'down' }; }
+    const deadline = Date.now() + overallMs;
+    const outOfTime = () => Date.now() > deadline;
     try {
       // Page through the slots: later pages are only probed once every
       // earlier room is full, so ordinary load costs one cheap page.
       for (let page = 0; page < PUBLIC_PAGES; page++) {
+        if (outOfTime()) break;
         const results = await Promise.all(
           Array.from({ length: PUBLIC_SLOTS }, (_, i) => page * PUBLIC_SLOTS + i)
             .map(i => Net._probe(guest, slotCode(i), timeoutMs).then(p => ({ slot: i, p }))));
@@ -240,6 +251,7 @@ export class Net {
         // Fullest first, ties to the lowest slot number.
         open.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
         for (const room of open) {
+          if (outOfTime()) { guest.destroy(); return { kind: 'timeout' }; }
           const k = await Net._knock(guest, slotCode(room.slot), name, timeoutMs);
           console.debug(`[qm] knock ${slotCode(room.slot)} -> ${k.kind}`);
           if (k.kind === 'join')
@@ -248,6 +260,7 @@ export class Net {
           // 'full'/'dead': lost a race — try the next room
         }
         for (const i of dead) {
+          if (outOfTime()) { guest.destroy(); return { kind: 'timeout' }; }
           const c = await Net._claim(slotCode(i), timeoutMs);
           console.debug(`[qm] claim ${slotCode(i)} -> ${c.kind}`);
           if (c.kind === 'host') { guest.destroy(); return { kind: 'host', net: c.net, slot: i }; }
@@ -255,6 +268,7 @@ export class Net {
           // 'taken': the probe said dead but the id is registered — the broker
           // never lies about that, so the probe was a false negative (slow net).
           // Give a proven-live room one direct knock before moving on.
+          if (outOfTime()) { guest.destroy(); return { kind: 'timeout' }; }
           const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
           console.debug(`[qm] knock ${slotCode(i)} (taken) -> ${k.kind}`);
           if (k.kind === 'join')
@@ -265,7 +279,7 @@ export class Net {
         // Every room on this page was full — fall through to the next page.
       }
       guest.destroy();
-      return { kind: 'full-all' };
+      return outOfTime() ? { kind: 'timeout' } : { kind: 'full-all' };
     } catch (e) {
       guest.destroy();
       return { kind: 'down' };
