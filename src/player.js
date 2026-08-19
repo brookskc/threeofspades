@@ -282,7 +282,11 @@ export class Player {
     // invariant as before (post tip and wing tops both land on the y=0.09
     // aim line) — only the geometry making up that line changed.
     const sights = (g, frontZ, rearZ) => {
-      mk(0.006, 0.04, 0.012, dark, 0, 0.07, frontZ, g);      // front post
+      // Post height reverted to span from the barrel's own top (0.035, both
+      // rifle and smg) up to the aim line (0.09) — thinning it down last
+      // time left its bottom floating 0.015 above the barrel with nothing
+      // connecting them. Width stays thin; only height needed the fix.
+      mk(0.006, 0.055, 0.012, dark, 0, 0.0625, frontZ, g);   // front post
       mk(0.008, 0.04, 0.03, dark, -0.0085, 0.07, rearZ, g);  // rear wing L
       mk(0.008, 0.04, 0.03, dark,  0.0085, 0.07, rearZ, g);  // rear wing R
     };
@@ -302,18 +306,27 @@ export class Player {
 
     // Bolt-action, scoped — no iron sights; a scope box above the barrel
     // does the aiming instead (the calibrated range notches live in a 2D
-    // HUD overlay while scoped, not on the gun itself — see main.js). A
-    // longer barrel than the rifle's and a folded bipod sell "deliberate,
-    // long-range" at a glance, same box-only vocabulary as everything else.
+    // HUD overlay while scoped, not on the gun itself — see
+    // _updateScopeNotches below). A longer barrel than the rifle's sells
+    // "deliberate, long-range" at a glance, same box-only vocabulary as
+    // everything else.
     const sniper = new THREE.Group();
     mk(0.045, 0.06, 1.05, dark, 0, 0, -0.55, sniper);       // long barrel
     mk(0.08, 0.13, 0.4, wood, 0, -0.055, -0.02, sniper);    // stock
     mk(0.05, 0.1, 0.06, skin, 0, -0.12, 0.06, sniper);      // hand
-    mk(0.06, 0.06, 0.28, dark, 0, 0.09, -0.35, sniper);     // scope body
-    mk(0.07, 0.07, 0.03, dark, 0, 0.09, -0.5, sniper);      // scope objective lens
-    mk(0.05, 0.02, 0.35, dark, -0.09, -0.16, -0.55, sniper); // bipod leg L, folded
-    mk(0.05, 0.02, 0.35, dark, 0.09, -0.16, -0.55, sniper);  // bipod leg R, folded
+    const scopeBody = mk(0.06, 0.06, 0.28, dark, 0, 0.09, -0.35, sniper);
+    const scopeLens = mk(0.07, 0.07, 0.03, dark, 0, 0.09, -0.5, sniper);
+    // Both sit right on the aim line (y=0.09 lands on-axis with the camera
+    // when fully aimed, same as the iron sights) — fine off-axis at hip
+    // fire, but dead center it's a solid opaque box parked directly in
+    // front of the lens, which is the whole "all black, can't see through
+    // it" bug: there was never a see-through scope, just geometry that
+    // happened to block the view completely once it was centered. Hidden
+    // once scoped in (see _updateScopeNotches, which already runs every
+    // frame and already knows when that is) — a real scope's own housing
+    // isn't in your view when you're looking through it either.
     this.vm.sniper = sniper;
+    this._scopeParts = [scopeBody, scopeLens];
 
     const spade = new THREE.Group();
     mk(0.035, 0.035, 0.5, wood, 0, 0, -0.25, spade);     // handle
@@ -585,6 +598,12 @@ export class Player {
     if (!el) return;
     const spec = TOOLS[this.tool];
     const scoped = aiming && spec.key === 'sniper' && this.aimK > 0.85;
+    // The scope's own housing sits dead center once fully aimed (same
+    // on-axis alignment the iron sights use) — a real scope's body isn't
+    // in your view when you're looking through it either, so it hides
+    // right when the notch overlay (the actual aiming reference at that
+    // point) takes over.
+    if (this._scopeParts) for (const m of this._scopeParts) m.visible = !scoped;
     el.classList.toggle('on', scoped);
     if (!scoped) return;
     if (!this._notchTicks) {
