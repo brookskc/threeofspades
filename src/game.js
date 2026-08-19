@@ -1814,10 +1814,20 @@ export class Game {
 
   _clientEvent(d) {
     switch (d.k) {
-      case 'edit':
+      case 'edit': {
+        // Explosions and structural collapses already replay their particle
+        // burst on every client (explodeAt and the 'col' case below both
+        // call blockBurst directly). An ordinary single-block break — a
+        // shovel dig, a gunfire-chipped block — never did: this just set the
+        // voxel and moved on, so a block disappearing from someone ELSE's
+        // dig or someone ELSE's gunfire was silent and invisible on every
+        // screen but the one that caused it.
+        const before = this.world.get(d.x, d.y, d.z);
         this.world.set(d.x, d.y, d.z, d.v);
         this.editLog.push([d.x, d.y, d.z, d.v]); // migration: late joiners get it from us
+        if (!d.v && before) this.effects.blockBurst([{ x: d.x, y: d.y, z: d.z, v: before }]);
         break;
+      }
       case 'boom': {
         // The host is untrusted input like anyone else: an oversized radius
         // would let a patched host crater the whole map on every client.
@@ -1878,6 +1888,13 @@ export class Game {
   _clientDied() {
     this.player.alive = false;
     this._respawnT = 10; // mirrors the host's human redeploy timer
+    // A GUEST's own death never goes through Player.die() at all — the host
+    // tells us we're dead over the wire and we land here instead. Without
+    // this, joining a match instead of hosting it was the one situation
+    // where your own death never disintegrated: the burst above and the
+    // ones in Bot.die()/RemoteProxy.die() covered everyone but you.
+    this.effects.burst(this.player.body.eye(), 26,
+      this.player.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     sfx.hurt();
     hud.damage();
     hud.respawn(10);

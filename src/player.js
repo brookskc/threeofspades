@@ -405,6 +405,10 @@ export class Player {
     this.body.half.h = 1.75;
     this.swing = 0;
     this.vmRoot.visible = false; // no floating gun while down
+    // Bots and remote players already burst apart on death (see their die()
+    // methods) — your own death was the one case that never called this,
+    // since it went straight to deathCam with no particle effect at all.
+    this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     sfx.hurt();
     this.game.onDeath(this, killer);
   }
