@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Body } from './entities.js';
 import { sfx } from './audio.js';
+import { stats } from './stats.js';
 
 // kick: degrees of aim climb per shot (recoil). aimSpread: hip-fire spread
 // multiplier while sighted. The SMG's small kick compounds at 10 rounds/s —
@@ -178,7 +179,12 @@ export class Player {
 
   // ---------------- viewmodel ----------------
   _buildViewmodel() {
-    const dark = new THREE.MeshBasicMaterial({ color: 0x23252b });
+    // Unlocked at kill milestones (see stats.js) — a small personal touch
+    // that's genuinely yours: nothing here rides the network, so it's
+    // exactly what YOU see when you look at your own gun, not something
+    // shown off to anyone else.
+    const dark = new THREE.MeshBasicMaterial({ color: stats.gunColor() });
+    this._gunMat = dark; // kept for live recoloring when the menu changes it mid-session
     const wood = new THREE.MeshBasicMaterial({ color: 0x6b4a2c });
     const green = new THREE.MeshBasicMaterial({ color: 0x4a9e4a });
     const skin = new THREE.MeshBasicMaterial({ color: 0xd9a066 });
@@ -241,6 +247,14 @@ export class Player {
     for (const k in this.vm) root.add(this.vm[k]);
     this.vmRoot.position.set(0.28, -0.26, -0.25);
     this._syncViewmodel();
+  }
+
+  // Called from the menu when an already-unlocked color is picked — the
+  // Player (and its viewmodel) is constructed once at page load and
+  // persists across every match, so a live material recolor is what makes
+  // a mid-session choice actually show up.
+  setGunColor(hex) {
+    this._gunMat?.color.setHex(hex);
   }
 
   _syncViewmodel() {
@@ -413,13 +427,57 @@ export class Player {
     this.game.onDeath(this, killer);
   }
 
-  // First-person death: crumple to the dirt with a roll, hold until respawn.
+  // First-person death: a killcam (if one was set — see Game#_startKillcam),
+  // then crumple to the dirt, then settle into a clean free-look for the
+  // rest of the respawn wait.
   deathCam(dt) {
-    this.deadT = Math.min(1, this.deadT + dt * 2.4);
-    const k = this.deadT * this.deadT * (3 - 2 * this.deadT); // smoothstep
+    const kc = this._killcam;
+    if (kc) {
+      const now = performance.now() / 1000;
+      if (kc.t0 == null) kc.t0 = now;
+      const elapsed = now - kc.t0;
+      const HOLD = 0.35; // linger on the final frame before handing off
+      if (elapsed < kc.span + HOLD) {
+        const trail = kc.trail;
+        const targetT = trail[0][0] + Math.min(elapsed, kc.span);
+        let a = trail[0], b = trail[trail.length - 1];
+        for (let i = 0; i < trail.length - 1; i++) {
+          if (trail[i][0] <= targetT && trail[i + 1][0] >= targetT) { a = trail[i]; b = trail[i + 1]; break; }
+        }
+        const s = b[0] > a[0] ? (targetT - a[0]) / (b[0] - a[0]) : 1;
+        const px = a[1] + (b[1] - a[1]) * s;
+        const py = a[2] + (b[2] - a[2]) * s + 1.57; // foot position + eye height
+        const pz = a[3] + (b[3] - a[3]) * s;
+        // No pitch/yaw for the killer crosses the wire (third-person avatars
+        // don't need it) — frame the death point directly instead of trying
+        // to reconstruct an aim angle from partial data. Math matches
+        // lookDir()'s exact convention: dir.y=sin(pitch), so pitch is
+        // atan2(dy, horizontal); dir.x=cos(pitch)cos(yaw) and
+        // dir.z=-cos(pitch)sin(yaw), so yaw is atan2(-dz, dx).
+        const dx = kc.deathPos.x - px, dy = kc.deathPos.y - py, dz = kc.deathPos.z - pz;
+        const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+        const yaw = Math.atan2(-dz, dx);
+        this.camera.position.set(px, py, pz);
+        this.camera.rotation.set(pitch, yaw - Math.PI / 2, 0, 'YXZ');
+        return;
+      }
+      this._killcam = null; // done — fall through to the crumple below
+    }
+
+    // Crumple, then settle into a clean, controllable view. Mouselook
+    // already updates pitch/yaw with no alive-check anywhere in _bind —
+    // the crumple's fixed ~29° roll and pitch offset were never removed
+    // once the fall finished, which is the only reason the respawn wait
+    // looked locked rather than a working free-look.
+    this.deadT = Math.min(1.6, this.deadT + dt * 2.4);
+    const fall = Math.min(1, this.deadT);
+    const k = fall * fall * (3 - 2 * fall); // 0..1 over the fall
+    const settleT = Math.max(0, Math.min(1, (this.deadT - 1) / 0.6));
+    const settled = settleT * settleT * (3 - 2 * settleT); // 0..1, un-tilting after the fall
     const eye = this.body.eye();
     this.camera.position.set(eye.x, eye.y - k * 1.2, eye.z);
-    this.camera.rotation.set(this.pitch + k * 0.3, this.yaw - Math.PI / 2, k * 0.5, 'YXZ');
+    this.camera.rotation.set(this.pitch + k * 0.3 * (1 - settled),
+      this.yaw - Math.PI / 2, k * 0.5 * (1 - settled), 'YXZ');
   }
 
   respawn(at = null) {
@@ -442,6 +500,7 @@ export class Player {
     this.cooldown = 0;
     this.reloading = 0;
     this.deadT = 0;
+    this._killcam = null; // defensive — should already be cleared, respawn shouldn't have to wait on it
     this.crouched = false;
     this.body.half.h = 1.75;
     this.vmRoot.visible = true;

@@ -5,6 +5,7 @@ import { initAudio } from './audio.js';
 import { SX, SZ } from './world.js';
 import { MAPS } from './mapgen.js';
 import { Net, makeCode, PUBLIC_SLOTS, slotCode } from './net.js';
+import { stats, GUN_COLORS } from './stats.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -367,6 +368,44 @@ const mapPref = $('mapPref'), modePref = $('modePref');
   rebuildMapPref();
   const pm = parseInt(params.get('map'), 10);
   if (Number.isInteger(pm) && pm >= 0 && pm < MAPS.length) mapPref.value = String(pm);
+}
+
+// Lifetime stats + gun color unlocks (see stats.js). Purely a home-screen
+// display — the color itself gets read once at Player construction and
+// updated live from here, so a swatch click works the same whether it's
+// the first thing you do or the fiftieth.
+{
+  const statsLine = $('statsLine'), gunColors = $('gunColors');
+  function renderStats() {
+    const s = stats.get();
+    const kd = (s.kills / Math.max(1, s.deaths)).toFixed(2);
+    statsLine.textContent =
+      `${s.kills} K · ${s.deaths} D · ${kd} K/D · ${s.matches} MATCHES · ${s.wins} WINS`;
+    gunColors.innerHTML = '';
+    const unlockedHex = new Set(stats.unlocked().map(c => c.hex));
+    const equipped = stats.gunColor();
+    for (const c of GUN_COLORS) {
+      const locked = !unlockedHex.has(c.hex);
+      const sw = document.createElement('div');
+      sw.className = 'swatch' + (locked ? ' locked' : '') + (c.hex === equipped ? ' equipped' : '');
+      sw.style.background = '#' + c.hex.toString(16).padStart(6, '0');
+      sw.title = locked ? `${c.name} — ${c.kills} kills` : c.name;
+      if (locked) {
+        const need = document.createElement('div');
+        need.className = 'need';
+        need.textContent = c.kills;
+        sw.appendChild(need);
+      } else {
+        sw.addEventListener('click', () => {
+          if (!stats.setGunColor(c.hex)) return; // re-checked here regardless of what the UI shows
+          game.player.setGunColor(c.hex);
+          renderStats();
+        });
+      }
+      gunColors.appendChild(sw);
+    }
+  }
+  renderStats();
 }
 
 // Returns the map index to start the new room on: the pinned map if it's
