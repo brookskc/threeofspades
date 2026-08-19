@@ -6,42 +6,6 @@ const ns = new URLSearchParams(typeof location === 'undefined' ? '' : location.s
 const PREFIX = 'threeofspades-' + (ns ? ns + '-' : '');
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
-// ICE config, passed to every RTCPeerConnection this game creates. This is a
-// full REPLACEMENT of PeerJS's own default (confirmed against the vendored
-// bundle: `config` is a shallow top-level option, not deep-merged with
-// PeerJS's iceServers), so it has to carry everything we want, not just the
-// new TURN entry — dropping Google's STUN here would silently lose it.
-//
-// The TURN entry is ExpressTURN's free tier: a real dedicated relay rather
-// than PeerJS's own shared-with-everyone default. Direct P2P is tried first
-// automatically — ICE always prefers a host/srflx candidate pair over a
-// relay one, so nothing here needs "try direct, then fall back to this"
-// logic; that's what ICE already does. This only matters when direct fails
-// (symmetric NAT, a firewall that blocks the necessary UDP).
-//
-// Only port 3478 is listed, on purpose. ExpressTURN's own marketing claims
-// TURN service on 80/443 too — the port that would actually help behind a
-// school/work firewall, since 3478 is a recognizable, commonly-blocked
-// VoIP/WebRTC port. I tested that claim directly (a hand-rolled TURN
-// Allocate request, both plain TCP and TLS-wrapped) against this exact
-// hostname before adding it here, and it doesn't hold: 80 and 443 both just
-// answer as ExpressTURN's regular website (HTTP/1.1 400 Bad Request to the
-// binary STUN bytes), not a TURN listener. Shipping a 443 entry that's
-// provably just a website would be worse than shipping nothing — it fails
-// silently and gives false confidence. If ExpressTURN adds a real 80/443
-// listener on this hostname later, or a different one, add it here then.
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  {
-    urls: [
-      'turn:free.expressturn.com:3478',                 // UDP — fastest when it works
-      'turn:free.expressturn.com:3478?transport=tcp',    // TCP fallback, same port
-    ],
-    username: '000000002102469538',
-    credential: 'Z0iOsj+EKypZWGeCst5RtEYRXT8=',
-  },
-];
-
 // Quick-match rendezvous: deterministic public room ids. Private codes are
 // drawn from an alphabet without digits, so 'PUB0'…'PUB15' can never collide.
 // Slots are scanned one page at a time: quiet hours cost one 8-slot probe,
@@ -76,7 +40,7 @@ export class Net {
     net.id = 'HOST';
     net.conns = new Map(); // peerId -> DataConnection
     net.handlers = handlers;
-    net.peer = new Peer(PREFIX + code, { config: { iceServers: ICE_SERVERS } });
+    net.peer = new Peer(PREFIX + code);
     window.__net = net; // debug handle
     net.peer.on('open', () => net.handlers.onOpen?.());
     net.peer.on('error', e => net.handlers.onError?.(e));
@@ -124,7 +88,7 @@ export class Net {
     const net = new Net();
     net.isHost = false;
     net.handlers = handlers;
-    net.peer = new Peer({ config: { iceServers: ICE_SERVERS } });
+    net.peer = new Peer();
     window.__net = net; // debug handle
     net.peer.on('error', e => net.handlers.onError?.(e));
     net.peer.on('open', () => {
@@ -261,7 +225,7 @@ export class Net {
   // leave. The deadline is checked only before each SEQUENTIAL step (the
   // concurrent probe phase is already bounded by timeoutMs on its own).
   static async quickScan(name, timeoutMs = 9000, overallMs = 20000) {
-    const guest = new Peer({ config: { iceServers: ICE_SERVERS } });
+    const guest = new Peer();
     const ready = new Promise((res, rej) => {
       guest.on('open', res);
       guest.on('error', rej); // pre-open error = broker unreachable
@@ -329,7 +293,7 @@ export class Net {
   // Resolves { kind: 'rooms', guest, rooms: [{ slot, humans, max, map, mode,
   // g, b, names }] } or { kind: 'down' }.
   static async roomScan(timeoutMs = 9000) {
-    const guest = new Peer({ config: { iceServers: ICE_SERVERS } });
+    const guest = new Peer();
     const ready = new Promise((res, rej) => {
       guest.on('open', res);
       guest.on('error', rej);
