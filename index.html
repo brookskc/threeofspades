@@ -156,6 +156,18 @@
   #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
     width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.9);
     box-shadow:0 0 4px rgba(0,0,0,.8); }
+  /* Sniper scope notches — calibrated range marks below the crosshair,
+     shown only scoped in with the sniper (see Player#_updateScopeNotches).
+     Positions are computed in JS each frame (they depend on viewport size
+     and the sniper's own zoom), so these rules are sizing/look only. */
+  #scopeNotches { position:absolute; left:50%; top:50%; transform:translateX(-50%);
+    display:none; pointer-events:none; }
+  #scopeNotches.on { display:block; }
+  #scopeNotches .tick { position:absolute; left:50%; transform:translate(-50%,-50%);
+    width:22px; height:2px; background:rgba(255,255,255,.75); }
+  #scopeNotches .tick::after { content:attr(data-r); position:absolute;
+    left:26px; top:50%; transform:translateY(-50%); font-size:10px;
+    letter-spacing:1px; color:rgba(255,255,255,.6); white-space:nowrap; }
   #hitmark { position:absolute; left:50%; top:50%; width:22px; height:22px;
     transform:translate(-50%,-50%) rotate(45deg); opacity:0; }
   #hitmark::before,#hitmark::after { content:""; position:absolute; background:#ffd97a; }
@@ -233,7 +245,7 @@
   <div id="vignette"></div>
 
   <div id="hud">
-    <div id="crosshair"></div><div id="hitmark"></div>
+    <div id="crosshair"></div><div id="hitmark"></div><div id="scopeNotches"></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>
     <canvas id="minimap" width="192" height="192"></canvas>
@@ -244,7 +256,7 @@
     <div class="panel" id="tool">
       <div id="toolname">RIFLE</div>
       <div id="ammo">10 <small>/ 10</small></div>
-      <div id="toolhint">1–5 / Q·E weapons · CTRL crouch · R reload</div>
+      <div id="toolhint">1–6 / Q·E weapons · CTRL crouch · R reload</div>
     </div>
     <div class="panel" id="scorewrap" style="left:50%;top:16px;transform:translateX(-50%);text-align:center;">
       <div id="score"><span class="g">GREEN 0</span><span style="opacity:.4">—</span><span class="b">0 BLUE</span></div>
@@ -301,7 +313,7 @@
     <div class="controls home-only">
       <div><b>W A S D</b> move — one-block rises are stairs, just walk up &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
-      <div><b>1 – 5 · Q · E</b> rifle · smg · spade · block · grenade &nbsp;·&nbsp; <b>R</b> reload</div>
+      <div><b>1 – 6 · Q · E</b> rifle · smg · spade · block · grenade · sniper &nbsp;·&nbsp; <b>R</b> reload</div>
       <div><b>CTRL</b> crouch — slower, steadier aim, and you cannot be walked off a ledge</div>
       <div><b>TAB</b> scoreboard &nbsp;·&nbsp; <b>T</b> chat the room &nbsp;·&nbsp; <b>Y</b> chat your team &nbsp;·&nbsp; redeploy takes 10s</div>
       <div><b>MISSION</b> the host picks the battle — capture the flag · team deathmatch · king of the hill</div>

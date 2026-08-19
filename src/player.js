@@ -8,17 +8,38 @@ import { stats } from './stats.js';
 // multiplier while sighted. The SMG's small kick compounds at 10 rounds/s —
 // spray without pulling down walks over heads past ~25 blocks; the rifle's
 // big kick fully recovers between its slow shots, so tap-fire stays laser.
+// dropVel: bullet-drop "velocity" — see Game#_dropCompensate. Not a literal
+// muzzle velocity; tuned so drop is felt at THIS game's actual engagement
+// ranges (max 130 units) rather than true-to-life numbers, which would be
+// imperceptible at that distance for any real firearm. Lower = more drop:
+// the SMG's slower round punishes trying to snipe with it far more than it
+// ever affects its real, close-range job.
 export const TOOLS = [
   { key: 'rifle', name: 'RIFLE', damage: 55, headMult: 2, interval: 0.55, spread: 0.0012,
-    mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5 },
+    mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5, dropVel: 410 },
   { key: 'smg', name: 'SMG', damage: 22, headMult: 1.6, interval: 0.1, spread: 0.02,
-    mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7 },
+    mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7, dropVel: 225 },
   { key: 'spade', name: 'SPADE', interval: 0.3 },
   { key: 'block', name: 'BLOCK', interval: 0.18 },
   { key: 'nade', name: 'GRENADE', interval: 0.8 },
+  // Bolt-action: slow, small mag, tight spread once compensated — the
+  // difficulty is meant to come entirely from reading range, not from the
+  // gun ALSO being inherently inaccurate on top of that. Highest headMult
+  // in the game: a clean headshot at range is a real kill (90*2.75=247.5,
+  // comfortably over 100hp); a body hit alone (90) isn't automatic.
+  { key: 'sniper', name: 'SNIPER', damage: 90, headMult: 2.75, interval: 1.25, spread: 0.0006,
+    mag: 5, reload: 3.0, auto: false, zoom: 4, kick: 0.04, aimSpread: 0.3, dropVel: 290 },
 ];
 
 const BASE_FOV = 75;
+// Bullet-drop gravity, duplicated from game.js's GRAVITY_DROP rather than
+// imported — game.js already imports FROM this file, so importing back
+// would be circular. Small tuning constants living separately per file
+// this way already happens elsewhere (world gravity vs. grenade gravity);
+// if this ever gets tuned, update both.
+const GRAVITY_DROP = 30;
+// Calibration ranges for the sniper's scope notches (units, ≈ meters).
+const NOTCH_RANGES = [40, 70, 100, 130];
 
 export class Player {
   constructor(game, camera, dom) {
@@ -107,11 +128,15 @@ export class Player {
         return;
       }
       if (!this.alive) return;
-      if (e.code >= 'Digit1' && e.code <= 'Digit5')
+      if (e.code >= 'Digit1' && e.code <= 'Digit6')
         this._selectTool(Number(e.code.slice(-1)) - 1);
       if (e.code === 'KeyQ' || e.code === 'KeyE') // cycle back / forward
         this._selectTool((this.tool + (e.code === 'KeyE' ? 1 : -1) + TOOLS.length) % TOOLS.length);
-      if (e.code === 'KeyR' && this.tool < 2 && this.ammo[this.tool] < TOOLS[this.tool].mag)
+      // A real gun has a mag; spade/block/nade don't — checking for that
+      // instead of a hardcoded tool index is what makes adding a gun (the
+      // sniper) not require touching this line at all.
+      if (e.code === 'KeyR' && TOOLS[this.tool].mag !== undefined
+          && this.ammo[this.tool] < TOOLS[this.tool].mag)
         this._reload();
       if (e.code === 'Space') { this.slideT = 0; this.body.jump(); } // hop out of a slide
     });
@@ -223,6 +248,21 @@ export class Player {
     sights(smg, -0.53, -0.1);
     this.vm.smg = smg;
 
+    // Bolt-action, scoped — no iron sights; a scope box above the barrel
+    // does the aiming instead (the calibrated range notches live in a 2D
+    // HUD overlay while scoped, not on the gun itself — see main.js). A
+    // longer barrel than the rifle's and a folded bipod sell "deliberate,
+    // long-range" at a glance, same box-only vocabulary as everything else.
+    const sniper = new THREE.Group();
+    mk(0.045, 0.06, 1.05, dark, 0, 0, -0.55, sniper);       // long barrel
+    mk(0.08, 0.13, 0.4, wood, 0, -0.055, -0.02, sniper);    // stock
+    mk(0.05, 0.1, 0.06, skin, 0, -0.12, 0.06, sniper);      // hand
+    mk(0.06, 0.06, 0.28, dark, 0, 0.09, -0.35, sniper);     // scope body
+    mk(0.07, 0.07, 0.03, dark, 0, 0.09, -0.5, sniper);      // scope objective lens
+    mk(0.05, 0.02, 0.35, dark, -0.09, -0.16, -0.55, sniper); // bipod leg L, folded
+    mk(0.05, 0.02, 0.35, dark, 0.09, -0.16, -0.55, sniper);  // bipod leg R, folded
+    this.vm.sniper = sniper;
+
     const spade = new THREE.Group();
     mk(0.035, 0.035, 0.5, wood, 0, 0, -0.25, spade);     // handle
     mk(0.12, 0.16, 0.03, dark, 0, 0, -0.52, spade);      // blade
@@ -294,7 +334,7 @@ export class Player {
     const shift = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
     const sprint = !this.crouched && this.keys['ShiftLeft'] ? 1.45 : 1;
     // Iron sights: RMB with a gun trades mobility for accuracy.
-    this.aiming = !!(this.mouseDown[2] && this.tool < 2);
+    this.aiming = !!(this.mouseDown[2] && TOOLS[this.tool].zoom !== undefined);
     const speed = (b.inWater ? 3.2 : 5.4) * sprint * (this.crouched ? 0.45 : 1)
       * (this.aiming ? 0.6 : 1);
     // Auto-step climbs one-block rises. Crouching keeps you hugging the
@@ -358,12 +398,13 @@ export class Player {
     if (xh) xh.style.opacity = 1 - this.aimK;
 
     // Aim zoom.
-    const aiming = this.mouseDown[2] && this.tool < 2;
+    const aiming = this.mouseDown[2] && TOOLS[this.tool].zoom !== undefined;
     const targetFov = aiming ? BASE_FOV / TOOLS[this.tool].zoom : BASE_FOV;
     if (Math.abs(this.camera.fov - targetFov) > 0.1) {
       this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 14);
       this.camera.updateProjectionMatrix();
     }
+    this._updateScopeNotches(aiming);
 
     // Tool usage.
     this.cooldown -= dt;
@@ -478,6 +519,38 @@ export class Player {
     this.camera.position.set(eye.x, eye.y - k * 1.2, eye.z);
     this.camera.rotation.set(this.pitch + k * 0.3 * (1 - settled),
       this.yaw - Math.PI / 2, k * 0.5 * (1 - settled), 'YXZ');
+  }
+
+  // Calibrated range marks below the crosshair — real rangefinding, not
+  // decoration: each tick's screen position is derived from the sniper's
+  // own drop formula, the same one _dropCompensate uses to resolve shots.
+  // Standard perspective conversion: a world drop d at range r subtends
+  // angle atan2(d,r) as seen from the eye; tan(that)/tan(halfFov) gives the
+  // fraction of HALF the screen height it projects to at the current zoom.
+  _updateScopeNotches(aiming) {
+    const el = this._notchEl ??= document.getElementById('scopeNotches');
+    if (!el) return;
+    const spec = TOOLS[this.tool];
+    const scoped = aiming && spec.key === 'sniper' && this.aimK > 0.85;
+    el.classList.toggle('on', scoped);
+    if (!scoped) return;
+    if (!this._notchTicks) {
+      this._notchTicks = NOTCH_RANGES.map(r => {
+        const t = document.createElement('div');
+        t.className = 'tick';
+        t.dataset.r = r + 'm';
+        el.appendChild(t);
+        return { el: t, r };
+      });
+    }
+    const halfFovRad = (this.camera.fov / 2) * Math.PI / 180;
+    const halfH = innerHeight / 2;
+    for (const { el: tickEl, r } of this._notchTicks) {
+      const dropAmt = GRAVITY_DROP * r * r / (2 * spec.dropVel * spec.dropVel);
+      const angle = Math.atan2(dropAmt, r);
+      const frac = Math.min(0.95, Math.tan(angle) / Math.tan(halfFovRad));
+      tickEl.style.top = (halfH * frac) + 'px';
+    }
   }
 
   respawn(at = null) {

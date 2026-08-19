@@ -60,6 +60,11 @@ export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(10, Math.max(2, 
 // moderate speed-hack sitting under the slack.
 const MAX_SPEED = 9;
 const MAX_SPEED_SLACK = 3;
+// Bullet drop gravity — see Game#_dropCompensate. Matches the world's own
+// GRAVITY magnitude (entities.js) for internal consistency; each weapon's
+// dropVel is what actually tunes how much a given gun drops, same way the
+// grenade arc uses its own separate constant (22) rather than reusing this.
+const GRAVITY_DROP = 30;
 const $ = id => document.getElementById(id);
 const v3 = a => new THREE.Vector3(a[0], a[1], a[2]);
 // Wire numbers are untrusted: a patched client sending NaN/Infinity coords
@@ -188,7 +193,7 @@ const hud = {
     else $('ammo').innerHTML = p.reloading > 0
       ? `<small>reloading…</small>`
       : `${p.ammo[p.tool]} <small>/ ${t.mag}</small>`;
-    $('toolhint').textContent = `Q·E / 1–5 weapons · CTRL crouch · R reload`;
+    $('toolhint').textContent = `Q·E / 1–6 weapons · CTRL crouch · R reload`;
   },
   health(p) {
     $('healthfill').style.width = Math.max(0, p.health) + '%';
@@ -873,9 +878,37 @@ export class Game {
     return !this.world.raycast(a, dir.normalize(), d);
   }
 
+  // Bullet drop: no projectile, no travel time — the shot still resolves
+  // instantly like every weapon always has, this just tilts the fired
+  // direction down before it does. Range is estimated with a probe against
+  // the SAME target the player is looking at (terrain, but also the
+  // nearest foe: a terrain-only probe would badly overestimate range
+  // against someone standing in open ground with nothing behind them for
+  // 100+ units, wildly over-dropping what should be a flat close shot).
+  // Called on both the host's authoritative fireHitscan AND a client's own
+  // local tracer preview in requestShoot, so what you see lines up with
+  // what actually lands rather than the client's tracer going one way and
+  // the real hit landing somewhere else.
+  _dropCompensate(from, dir, spec, shooter) {
+    if (!spec.dropVel) return dir; // spade/block/nade: no ballistics at all
+    const voxel = this.world.raycast(from, dir, 130);
+    let range = voxel ? voxel.dist : 130;
+    for (const e of this.foesOf(shooter.team)) {
+      if (!e.alive) continue;
+      const r = rayVsSoldier(from, dir, e.body);
+      if (r !== null && r.t < range) range = r.t;
+    }
+    const drop = GRAVITY_DROP * range * range / (2 * spec.dropVel * spec.dropVel);
+    if (drop < 0.01) return dir; // negligible at this range — not worth the trig
+    const point = from.clone().addScaledVector(dir, range);
+    point.y -= drop;
+    return point.sub(from).normalize();
+  }
+
   // ---------------- combat ----------------
   fireHitscan(shooter, from, dir, spec) {
     shooter.protT = 0; // firing drops spawn protection
+    dir = this._dropCompensate(from, dir, spec, shooter);
     // Crouch steadies aim; iron sights steady it more (rifle ×0.5, SMG ×0.7 —
     // the SMG keeps its close-range identity, the rifle owns aimed mid-range).
     const spread = (spec.spread ?? 0) * (shooter.crouched ? 0.35 : 1)
@@ -954,11 +987,16 @@ export class Game {
     if (this.mode !== 'client') return this.fireHitscan(p, p.body.eye(), p.lookDir(), t);
     p.protT = 0; // firing drops spawn protection (the host drops its copy too)
     const from = p.body.eye(), dir = p.lookDir();
-    const vox = this.world.raycast(from, dir, 130);
+    // Local preview only, using the SAME raw dir sent below — the host
+    // independently runs _dropCompensate on that raw direction inside
+    // fireHitscan, so both sides land on the same answer without this
+    // needing to send anything but what the player actually looked at.
+    const previewDir = this._dropCompensate(from, dir, t, p);
+    const vox = this.world.raycast(from, previewDir, 130);
     const end = vox
-      ? from.clone().addScaledVector(dir, Math.max(0, vox.dist - 0.05))
-      : from.clone().addScaledVector(dir, 130);
-    this.effects.tracer(from.clone().addScaledVector(dir, 1.2).add(new THREE.Vector3(0, -0.12, 0)), end);
+      ? from.clone().addScaledVector(previewDir, Math.max(0, vox.dist - 0.05))
+      : from.clone().addScaledVector(previewDir, 130);
+    this.effects.tracer(from.clone().addScaledVector(previewDir, 1.2).add(new THREE.Vector3(0, -0.12, 0)), end);
     this.net.send({ t: 'a', k: 'shoot', o: arr(from), d: arr(dir), tool: p.tool });
   }
   requestDig(p) {
