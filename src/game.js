@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { VoxelWorld, SEA, SX, SY, SZ, BLOCK, PALETTE } from './world.js';
 import { generateMap, BASE, MAPS, mapsForMode } from './mapgen.js';
-import { Player, TOOLS } from './player.js';
+import { Player, TOOLS, GUN_CLASSES } from './player.js';
 import { Bot, reserveBotId } from './bots.js';
 import { Effects } from './effects.js';
 import { sfx, setListener } from './audio.js';
@@ -306,6 +306,14 @@ const hud = {
   respawn(t) {
     $('respawn').style.opacity = t > 0 ? 1 : 0;
     if (t > 0) $('respawn').textContent = `REDEPLOYING IN ${Math.ceil(t)}…`;
+    $('classPick').style.opacity = t > 0 ? 1 : 0;
+  },
+  // Highlights which class is currently PENDING for the next life — called
+  // once on death (to show the persisted/previous choice) and again each
+  // time the player changes it.
+  classPick(idx) {
+    for (const el of document.querySelectorAll('#classPick .opt'))
+      el.classList.toggle('picked', Number(el.dataset.cls) === idx);
   },
   // Chat line. The text goes in as a TEXT NODE — never HTML — so a message
   // can't inject markup.
@@ -577,6 +585,13 @@ class RemoteProxy {
     this.carrier = false;
     this.blocks = 50;
     this.tool = 0;
+    // One gun class per life, same restriction as the local player.
+    // gunClass is what they're using RIGHT NOW; _pendingClass is what
+    // they'll spawn with next (set by a 'class' action, applied at
+    // respawn). New joiners start on rifle until they pick something —
+    // there's no pre-match loadout screen to read a preference from.
+    this.gunClass = 0;
+    this._pendingClass = 0;
     this.yaw = 0;
     this.nades = 3;            // host-enforced grenade stock (mirrors Player)
     this.nadeRegen = 0;
@@ -606,6 +621,8 @@ class RemoteProxy {
     this.nades = 3;
     this.nadeRegen = 0;
     this.protT = 3; // spawn protection, host-enforced
+    this.gunClass = this._pendingClass; // whatever they last picked while dead
+    this.tool = this.gunClass;
     this.game.net.sendTo(this.id, { t: 'e', k: 'spawn', x: p.x, y: p.y, z: p.z });
   }
 }
@@ -1502,6 +1519,13 @@ export class Game {
     const p = this.remote.get(id);
     if (!p) return;
     if (d.t === 'a' && d.k === 'chat') return this._hostOnChat(id, d.text, d.scope);
+    // Class pick: sent while dead, so it must NOT require p.alive the way
+    // shoot/dig/place/nade do below (same reason chat gets its own early
+    // case above it) — applied at the NEXT respawn, not immediately.
+    if (d.t === 'a' && d.k === 'class') {
+      if (GUN_CLASSES.includes(d.cls)) p._pendingClass = d.cls;
+      return;
+    }
     if (d.t === 's') {
       // Finite + bounded: a NaN here poisons every distance check downstream.
       if (![d.x, d.y, d.z, d.yaw].every(Number.isFinite)) return;
@@ -1538,6 +1562,11 @@ export class Game {
       const now = this.time, gap = k => now - (p._actT[k] ?? -9);
       if (d.k === 'shoot') {
         const spec = TOOLS[d.tool];
+        // The other two guns aren't in this life's belt — a patched client
+        // claiming otherwise must not get their damage/spread anyway. Non-
+        // gun tools (spade/block never fire 'shoot'; this only ever gates
+        // GUN_CLASSES members) and the player's own class pass through.
+        if (GUN_CLASSES.includes(d.tool) && d.tool !== p.gunClass) return;
         if (!spec?.damage || gap('shoot') < spec.interval * 0.6) return;
         p._actT.shoot = now;
         this.fireHitscan(p, o, dir, spec);
@@ -1716,6 +1745,13 @@ export class Game {
     proxy.alive = !!alive;
     proxy.carrier = !!carrier;
     proxy.tool = tool;
+    // gunClass never rode the snapshot wire (no room without a real field
+    // addition, and this is a rare edge case). If they're mid-life holding
+    // one of the three guns right now, THAT is their class — recovers the
+    // common case for free. Only falls back to rifle if they happened to
+    // be on spade/block/nade at the exact instant the host died.
+    proxy.gunClass = GUN_CLASSES.includes(tool) ? tool : 0;
+    proxy._pendingClass = proxy.gunClass;
     proxy.blocks = blocks;
     proxy.crouched = !!crouch;
     if (nades !== undefined) proxy.nades = nades;
@@ -2103,6 +2139,7 @@ export class Game {
     sfx.hurt();
     hud.damage();
     hud.respawn(10);
+    hud.classPick(this.player._pendingClass); // show the current pick before any key is pressed
     const av = killerKey ? this.avatars.get(killerKey) : null;
     if (av) this._startKillcam(av.samples, this.player.body.pos, killerName);
   }

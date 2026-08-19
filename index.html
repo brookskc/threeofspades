@@ -209,6 +209,13 @@
     background:radial-gradient(ellipse at center, transparent 62%, rgba(10,18,30,.20)); }
   #respawn { position:absolute; left:50%; top:58%; transform:translateX(-50%);
     font-size:15px; letter-spacing:2px; opacity:0; }
+  /* Class picker: press 1/2/3 while dead to choose your gun for next life —
+     the other two guns simply aren't in the belt this spawn. */
+  #classPick { position:absolute; left:50%; top:64%; transform:translateX(-50%);
+    display:flex; gap:18px; font-size:12px; letter-spacing:2px; opacity:0;
+    text-transform:uppercase; }
+  #classPick .opt { opacity:.5; }
+  #classPick .opt.picked { opacity:1; color:#ffd97a; }
 
   /* chat — lower left, above the vitals panel */
   #chat { position:absolute; left:22px; bottom:102px; width:380px; max-width:44vw;
@@ -265,6 +272,11 @@
     <div id="feed"></div>
     <div id="msg"></div>
     <div id="respawn"></div>
+    <div id="classPick">
+      <div class="opt" data-cls="0">1 RIFLE</div>
+      <div class="opt" data-cls="1">2 SMG</div>
+      <div class="opt" data-cls="5">3 SNIPER</div>
+    </div>
     <div id="chat">
       <div id="chatlog"></div>
       <div id="chatrow">
@@ -314,6 +326,7 @@
       <div><b>W A S D</b> move — one-block rises are stairs, just walk up &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SHIFT</b> sprint</div>
       <div><b>MOUSE</b> look &nbsp;·&nbsp; <b>LMB</b> fire / dig / place &nbsp;·&nbsp; <b>RMB</b> aim</div>
       <div><b>1 – 6 · Q · E</b> rifle · smg · spade · block · grenade · sniper &nbsp;·&nbsp; <b>R</b> reload</div>
+      <div><b>CLASS</b> pick one of rifle · smg · sniper while waiting to respawn (<b>1 · 2 · 3</b>) — only your chosen gun is in the belt that life</div>
       <div><b>CTRL</b> crouch — slower, steadier aim, and you cannot be walked off a ledge</div>
       <div><b>TAB</b> scoreboard &nbsp;·&nbsp; <b>T</b> chat the room &nbsp;·&nbsp; <b>Y</b> chat your team &nbsp;·&nbsp; redeploy takes 10s</div>
       <div><b>MISSION</b> the host picks the battle — capture the flag · team deathmatch · king of the hill</div>

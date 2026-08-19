@@ -30,6 +30,9 @@ export const TOOLS = [
   { key: 'sniper', name: 'SNIPER', damage: 90, headMult: 2.75, interval: 1.25, spread: 0.0006,
     mag: 5, reload: 3.0, auto: false, zoom: 4, kick: 0.04, aimSpread: 0.3, dropVel: 290 },
 ];
+// Which TOOLS slots are "class" guns for the one-gun-per-life restriction —
+// spade/block/nade stay universally available regardless of class.
+export const GUN_CLASSES = [0, 1, 5]; // rifle, smg, sniper
 
 const BASE_FOV = 75;
 // Bullet-drop gravity, duplicated from game.js's GRAVITY_DROP rather than
@@ -55,7 +58,18 @@ export class Player {
     this.pitch = 0;
     this.keys = {};
     this.mouseDown = [false, false, false];
-    this.tool = 0;
+    // One gun class per life — the other two simply aren't in the belt
+    // this spawn. Persisted like gun color/lobby prefs so it carries over
+    // between lives without re-picking every time; _pendingClass is what
+    // you'll spawn with NEXT (changeable while dead), gunClass is what
+    // you're actually using RIGHT NOW. Same try/catch discipline as
+    // stats.js — private browsing or a full quota just means it doesn't
+    // persist, never a broken constructor.
+    let savedClass = NaN;
+    try { savedClass = Number(localStorage.getItem('tos.class')); } catch { /* best effort */ }
+    this.gunClass = GUN_CLASSES.includes(savedClass) ? savedClass : GUN_CLASSES[0];
+    this._pendingClass = this.gunClass;
+    this.tool = this.gunClass;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
     this.blocks = 50;
     this.grenades = 3;
@@ -127,11 +141,24 @@ export class Player {
         this.game.hud.statsShow(this.game);
         return;
       }
-      if (!this.alive) return;
+      if (!this.alive) {
+        // Class select while waiting to respawn: 1/2/3 for rifle/smg/
+        // sniper. Applied at the moment respawn() actually fires, not
+        // immediately — changing your mind mid-wait just changes what
+        // you're about to spawn with, not your current (dead) loadout.
+        if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
+          const idx = GUN_CLASSES[Number(e.code.slice(-1)) - 1];
+          this._pendingClass = idx;
+          try { localStorage.setItem('tos.class', String(idx)); } catch { /* best effort */ }
+          if (this.game.mode === 'client') this.game.net.send({ t: 'a', k: 'class', cls: idx });
+          this.game.hud.classPick(idx);
+        }
+        return;
+      }
       if (e.code >= 'Digit1' && e.code <= 'Digit6')
         this._selectTool(Number(e.code.slice(-1)) - 1);
       if (e.code === 'KeyQ' || e.code === 'KeyE') // cycle back / forward
-        this._selectTool((this.tool + (e.code === 'KeyE' ? 1 : -1) + TOOLS.length) % TOOLS.length);
+        this._cycleTool(e.code === 'KeyE' ? 1 : -1);
       // A real gun has a mag; spade/block/nade don't — checking for that
       // instead of a hardcoded tool index is what makes adding a gun (the
       // sniper) not require touching this line at all.
@@ -168,11 +195,26 @@ export class Player {
 
   _selectTool(i) {
     if (i === this.tool) return;
+    // Class-locked for the life: the other two guns simply aren't in the
+    // belt this spawn. Spade/block/nade stay switchable as always, and
+    // your chosen class is always available.
+    if (GUN_CLASSES.includes(i) && i !== this.gunClass) { sfx.click(); return; }
     this.tool = i;
     this.reloading = 0;
     sfx.click();
     this._syncViewmodel();
     this.game.hud.refreshTool(this);
+  }
+
+  // Q/E cycling has to SKIP forbidden gun slots rather than land on one and
+  // silently do nothing — landing on a locked slot and just refusing would
+  // read as "the key didn't work," not "that weapon isn't available."
+  _cycleTool(dir) {
+    let i = this.tool;
+    for (let n = 0; n < TOOLS.length; n++) {
+      i = (i + dir + TOOLS.length) % TOOLS.length;
+      if (!GUN_CLASSES.includes(i) || i === this.gunClass) { this._selectTool(i); return; }
+    }
   }
 
   _reload() {
@@ -475,6 +517,7 @@ export class Player {
     // since it went straight to deathCam with no particle effect at all.
     this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     sfx.hurt();
+    this.game.hud.classPick(this._pendingClass); // show the current pick before any key is pressed
     this.game.onDeath(this, killer);
   }
 
@@ -576,6 +619,8 @@ export class Player {
     this.protT = 3; // spawn protection: 3s, drains twice as fast moving, gone if you fire
     this.slideT = 0; this.slideCd = 0;
     this.stepK = 0;
+    this.gunClass = this._pendingClass; // whatever was picked (or kept) while dead
+    this.tool = this.gunClass;
     this.ammo = TOOLS.map(t => t.mag ?? 0);
     this.grenades = 3;      // fresh loadout on every life — a spent belt used
     this.grenadeRegen = 0;  // to follow you through respawns and map rotations

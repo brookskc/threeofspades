@@ -4,15 +4,18 @@
 import * as THREE from 'three';
 import { Body, makeSoldier, makeNametag, animateSoldier, animateDeath, resetDeath, setCrouch, placeShadow } from './entities.js';
 import { SEA, SX, SZ, BLOCK } from './world.js';
+import { TOOLS, GUN_CLASSES } from './player.js';
 
 const NAMES = {
   blue:  ['Vex', 'Havoc', 'Irons', 'Dagger', 'Rook', 'Frost'],
   green: ['Sarge', 'Pine', 'Moss', 'Flint', 'Clover', 'Briar'],
 };
-const GUN = { damage: 18, headMult: 1.5, interval: 0.12, spread: 0.035, mag: 24, reload: 2.0 };
-// ~150 theoretical dps, up from ~114 — closer to the player SMG's ~220 without
-// matching it outright. Bots were losing straight fights on paper before a
-// single shot missed.
+// Bots now fire the same rifle/smg/sniper a player would (see gunClass
+// below), not their own separately-tuned weapon — a deliberate rebalance,
+// not an oversight: the custom weapon this used to be existed specifically
+// to give bots a fair fight against a player's real guns, and that tuning
+// is gone now that they carry one of those same three guns instead.
+const randomClass = () => GUN_CLASSES[Math.floor(Math.random() * GUN_CLASSES.length)];
 
 // Difficulty tiers scale reaction time, aim error and target memory.
 // ?botq=easy|hard skews the whole room; every bot still gets its own jitter.
@@ -49,7 +52,8 @@ export class Bot {
     this.target = null;        // enemy entity currently engaged
     this.aimT = 0;             // reaction timer after acquiring target
     this.cooldown = Math.random();
-    this.ammo = GUN.mag;
+    this.gunClass = randomClass(); // one of rifle/smg/sniper, rerolled each life
+    this.ammo = TOOLS[this.gunClass].mag;
     this.reloading = 0;
     this.stuck = 0;            // consecutive motionless samples
     this.sampleT = 0.4;        // displacement sampling timer
@@ -584,9 +588,9 @@ export class Bot {
     this.cooldown -= dt;
     if (this.reloading > 0) {
       this.reloading -= dt;
-      if (this.reloading <= 0) this.ammo = GUN.mag;
+      if (this.reloading <= 0) this.ammo = TOOLS[this.gunClass].mag;
     } else if (this.target && this.aimT > reactT && this.cooldown <= 0) {
-      if (this.ammo <= 0) { this.reloading = GUN.reload; }
+      if (this.ammo <= 0) { this.reloading = TOOLS[this.gunClass].reload; }
       else {
         const from = b.eye();
         const toFoe = new THREE.Vector3().subVectors(this.target.body.pos, b.pos).setY(0).normalize();
@@ -595,21 +599,23 @@ export class Bot {
         if (this.face.dot(toFoe) > 0.87 && g.losClear(from, this.target.body.eye())) {
           this.ammo--;
           const burstPause = Math.random() < 0.25;
-          this.cooldown = GUN.interval * (burstPause ? 4 : 1); // burst rhythm
+          this.cooldown = TOOLS[this.gunClass].interval * (burstPause ? 4 : 1); // burst rhythm
           if (burstPause && this.coverT > 0) this.duckT = this.cooldown + 0.15;
           // One randomization source, not two stacked ones: this used to
-          // hand-jitter the aim vector AND let fireHitscan add GUN.spread on
-          // top of that, every shot. Worse, the manual jitter shrank toward
-          // a floor with aimT while GUN.spread never did — so a bot that had
-          // held a target for two full seconds was still only as accurate as
-          // the weapon's fixed spread allowed, and "holding aim longer" never
-          // actually paid off the way the numbers implied it should. Aim
-          // precisely and let the weapon's own spread (scaled by hold time
-          // and skill, same as a human tightening up) be the only randomness.
+          // hand-jitter the aim vector AND let fireHitscan add the weapon's
+          // own spread on top of that, every shot. Worse, the manual jitter
+          // shrank toward a floor with aimT while the weapon spread never
+          // did — so a bot that had held a target for two full seconds was
+          // still only as accurate as the fixed spread allowed, and
+          // "holding aim longer" never actually paid off the way the
+          // numbers implied it should. Aim precisely and let the weapon's
+          // own spread (scaled by hold time and skill, same as a human
+          // tightening up) be the only randomness.
+          const spec = TOOLS[this.gunClass];
           const aim = new THREE.Vector3().subVectors(this.target.body.eye(), from).normalize();
           const held = Math.min(1, (this.aimT - reactT) / 1.0); // 0 fresh -> 1 well-aimed
           const spreadMul = (1.8 - 1.3 * held) / this.skill;
-          g.fireHitscan(this, from, aim, { ...GUN, spread: GUN.spread * spreadMul });
+          g.fireHitscan(this, from, aim, { ...spec, spread: spec.spread * spreadMul });
         }
       }
     }
@@ -714,7 +720,8 @@ export class Bot {
     this.health = 100;
     this.alive = true;
     this.protT = 3; // same spawn protection humans get
-    this.ammo = GUN.mag;
+    this.gunClass = randomClass(); // rerolled each life, same as a human choosing
+    this.ammo = TOOLS[this.gunClass].mag;
     this.stuck = 0;
     this.sampleT = 0.4;
     this.digT = 0;
