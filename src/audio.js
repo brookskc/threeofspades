@@ -81,6 +81,11 @@ export const sfx = {
   crumble:   () => { burst({ dur: 0.45, freq: 260, gain: 0.6 }); tone({ freq: 90, dur: 0.4, type: 'sawtooth', gain: 0.2, slide: -40 }); },
   place:     () => tone({ freq: 300, dur: 0.06, type: 'triangle', gain: 0.25, slide: 120 }),
   hit:       () => tone({ freq: 900, dur: 0.05, type: 'square', gain: 0.18 }),
+  // Confirmed kill: a bright two-note rising chime (sine, not the hit
+  // tick's harsher square wave) — deliberately distinct so it reads as
+  // "that one was different," not just a louder version of the same tick.
+  kill:      () => { tone({ freq: 1100, dur: 0.1, type: 'sine', gain: 0.24 });
+                      tone({ freq: 1650, dur: 0.16, type: 'sine', gain: 0.2, delay: 0.06 }); },
   hurt:      () => { tone({ freq: 220, dur: 0.15, type: 'sawtooth', gain: 0.3, slide: -140 }); },
   throw_:    () => burst({ dur: 0.09, freq: 2000, gain: 0.15 }),
   explosion: () => { burst({ dur: 0.9, freq: 500, gain: 1.0 }); tone({ freq: 70, dur: 0.7, type: 'sine', gain: 0.6, slide: -40 }); },

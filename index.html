@@ -223,6 +223,16 @@
   #hitmark.pop { animation:hitpop .18s ease-out; }
   @keyframes hitpop { 0%{opacity:1; transform:translate(-50%,-50%) rotate(45deg) scale(1.4);}
     100%{opacity:0; transform:translate(-50%,-50%) rotate(45deg) scale(.9);} }
+  /* Kill confirmation: same "+" mark, but red (the established danger
+     color, already used for the sniper class-lock click and elsewhere)
+     instead of the plain-hit gold, bigger, and held a beat longer before
+     it fades — a kill should read as visibly different from a body shot,
+     not the exact same mark every time regardless of what happened. */
+  #hitmark.kill::before,#hitmark.kill::after { background:#e05a4e; }
+  #hitmark.kill.pop { animation:hitpopkill .32s ease-out; }
+  @keyframes hitpopkill { 0%{opacity:1; transform:translate(-50%,-50%) rotate(45deg) scale(1.9);}
+    55%{opacity:1; transform:translate(-50%,-50%) rotate(45deg) scale(1.15);}
+    100%{opacity:0; transform:translate(-50%,-50%) rotate(45deg) scale(1);} }
 
   .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
     border-radius:6px; backdrop-filter:blur(3px); }

@@ -292,10 +292,15 @@ const hud = {
     clearTimeout(this._mt);
     this._mt = setTimeout(() => (m.style.opacity = 0), 2200);
   },
-  hitmark() {
+  // killed=true swaps the mark to the kill styling (see CSS) — same pop
+  // animation mechanism (remove class, force reflow, re-add), just an
+  // extra class so a kill and a plain hit look and feel different instead
+  // of the exact same "+" every time regardless of what actually happened.
+  hitmark(killed) {
     const h = $('hitmark');
-    h.classList.remove('pop');
+    h.classList.remove('pop', 'kill');
     void h.offsetWidth;
+    h.classList.toggle('kill', !!killed);
     h.classList.add('pop');
   },
   damage() {
@@ -959,9 +964,10 @@ export class Game {
 
     if (hit) {
       const dmg = spec.damage * (head ? (spec.headMult ?? 1.5) : 1);
-      if (shooter === this.player) { sfx.hit(); hud.hitmark(); }
-      else if (shooter.isRemote) this.net.sendTo(shooter.id, { t: 'e', k: 'hit' });
       this.damage(hit, dmg, shooter);
+      // hit was drawn from alive-only foes above, so !hit.alive here means
+      // THIS shot is what did it — not just "they happen to be dead."
+      this._hitFeedback(shooter, !hit.alive);
     }
 
     // Gunfire chips blocks: the voxel that stopped the bullet accumulates
@@ -1063,6 +1069,18 @@ export class Game {
     if (scope === 'all' || p.team === this.player.team)
       hud.chatMsg({ name: p.name, team: p.team, text, scope });
     this._hostRelayChat(id, p.team, text, scope);
+  }
+
+  // Shared by every attack that can attribute a single attacker (gunfire,
+  // melee, grenades) — decides whether that attacker sees/hears a plain
+  // hit or a kill confirmation. Always call this AFTER damage() has
+  // already run, not before: killed has to reflect what damage() actually
+  // did (which can no-op on spawn protection or an already-dead target),
+  // not a guess made before applying it.
+  _hitFeedback(attacker, killed) {
+    if (!attacker) return;
+    if (attacker === this.player) { killed ? sfx.kill() : sfx.hit(); hud.hitmark(killed); }
+    else if (attacker.isRemote) this.net.sendTo(attacker.id, { t: 'e', k: 'hit', kill: killed });
   }
 
   damage(victim, amount, attacker) {
@@ -1231,9 +1249,8 @@ export class Game {
     for (const e of this.foesOf(p.team)) {
       if (e.alive && e.body.eye().distanceTo(origin) < 3.2) {
         this.effects.burst(e.body.eye(), 10, 0xc0392b, 4);
-        if (p === this.player) { sfx.hit(); hud.hitmark(); }
-        else if (p.isRemote) this.net.sendTo(p.id, { t: 'e', k: 'hit' });
         this.damage(e, 45, p);
+        this._hitFeedback(p, !e.alive); // e was drawn from the alive-only loop above
         return;
       }
     }
@@ -1324,6 +1341,12 @@ export class Game {
       // kills regardless — you were standing in the fireball.
       if (d > R && !this.losClear(g.pos, center)) continue;
       this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner);
+      // Unlike gunfire/melee (which only ever loop foesOf, excluding your
+      // own team including yourself), this loop is entities() — everyone,
+      // no team filter — so a grenade that catches its own thrower is a
+      // real, reachable case here. Self-damage still applies above; it
+      // just shouldn't ring a "kill confirmed" chime for blowing yourself up.
+      if (e !== g.owner) this._hitFeedback(g.owner, !e.alive);
     }
   }
 
@@ -2059,7 +2082,7 @@ export class Game {
       case 'msg':
         if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
         break;
-      case 'hit': sfx.hit(); hud.hitmark(); break;
+      case 'hit': d.kill ? sfx.kill() : sfx.hit(); hud.hitmark(d.kill); break;
       case 'chat':
         hud.chatMsg({ name: cleanName(d.name), team: d.team === 'blue' ? 'blue' : 'green',
                       text: String(d.text ?? '').slice(0, 120), scope: d.scope });
