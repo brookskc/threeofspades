@@ -521,8 +521,15 @@ export class Player {
       // already so close to 1x that the difference is hard to notice;
       // sniper (14/4=3.5) is a genuine ~4x slower scope-in, specifically
       // to cost something for quick-scoping into a close fight rather than
-      // holding a deliberate long-range position.
-      const easeRate = 14 / TOOLS[this.tool].zoom;
+      // holding a deliberate long-range position. ?? 1 matters here:
+      // spade/block/nade have no zoom field at all, and switching to one
+      // of them WHILE still easing back from a zoomed shot (aiming just
+      // went false, but camera.fov hasn't caught up to BASE_FOV yet) hits
+      // this exact line on the very next frame with the NEW tool, not the
+      // old one — dividing 14 by undefined produced NaN, which corrupted
+      // camera.fov permanently (every later frame's guard above compares
+      // against NaN and is always false, so the fix code never ran again).
+      const easeRate = 14 / (TOOLS[this.tool].zoom ?? 1);
       this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * easeRate);
       this.camera.updateProjectionMatrix();
     }
@@ -592,18 +599,18 @@ export class Player {
     this.game.onDeath(this, killer);
   }
 
-  // The FOV-easing (and the scope notch/vignette overlay it drives) lives
-  // entirely inside update(), which stops running the instant you die —
-  // nothing else would ever bring it back to normal, so dying while zoomed
-  // in left the death camera (and the flycam after it) rendering through
-  // whatever FOV you happened to be holding at the exact instant you died.
-  // No easing here on purpose: you're dead, there's no "smoothly" un-aim a
+  // The FOV-easing (and the scope notch overlay it drives) lives entirely
+  // inside update(), which stops running the instant you die — nothing
+  // else would ever bring it back to normal, so dying while zoomed in left
+  // the death camera (and the flycam after it) rendering through whatever
+  // FOV you happened to be holding at the exact instant you died. No
+  // easing here on purpose: you're dead, there's no "smoothly" un-aim a
   // scope you can no longer use.
   resetZoom() {
     this.camera.fov = BASE_FOV;
     this.camera.updateProjectionMatrix();
     this.aiming = false;
-    this._updateScopeNotches(false); // un-hides the scope body/lens, hides the notch overlay + vignette
+    this._updateScopeNotches(false); // un-hides the scope body/lens, hides the notch overlay
   }
 
   // First-person death: crumple to the dirt with a roll, then a free-roam
@@ -688,7 +695,6 @@ export class Player {
   // fraction of HALF the screen height it projects to at the current zoom.
   _updateScopeNotches(aiming) {
     const el = this._notchEl ??= document.getElementById('scopeNotches');
-    const vignette = this._vignetteEl ??= document.getElementById('scopeVignette');
     if (!el) return;
     const spec = TOOLS[this.tool];
     const scoped = aiming && spec.key === 'sniper' && this.aimK > 0.85;
@@ -699,7 +705,6 @@ export class Player {
     // point) takes over.
     if (this._scopeParts) for (const m of this._scopeParts) m.visible = !scoped;
     el.classList.toggle('on', scoped);
-    vignette?.classList.toggle('on', scoped);
     if (!scoped) return;
     if (!this._notchTicks) {
       this._notchTicks = NOTCH_RANGES.map(r => {

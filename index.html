@@ -172,39 +172,11 @@
      regular crosshair dot already fades out fully aimed, same as the
      rifle/smg iron sights, so without this there was NOTHING marking
      where the camera is actually pointed) plus calibrated range marks
-     below it, plus a scope mask for the "looking through an optic" read.
-     The mask is a voxelized circle (an 8-band pixel-circle approximation,
-     hard edges, no gradient) rather than a smooth radial fade — this game
-     has no cylinders, spheres, or curves anywhere in its own geometry, so
-     a soft photographic vignette was the one thing on screen that didn't
-     look like it belonged to this game. Built as a single clip-path with
-     an evenodd fill rule: an outer rect (the whole screen) with the
-     voxel-circle cut out of it as a hole, both expressed in vh so the
-     shape doesn't stretch into an ellipse on a non-square viewport.
-     Notch positions are computed in JS each frame (they depend on
-     viewport size and the sniper's own zoom) — these rules are
+     below it. No screen mask/vignette anymore — had a voxelized-circle
+     one here (a black "looking through an optic" surround), removed on
+     request. Notch positions are computed in JS each frame (they depend
+     on viewport size and the sniper's own zoom) — these rules are
      sizing/look only. See Player#_updateScopeNotches. */
-  #scopeVignette { position:fixed; inset:0; pointer-events:none; opacity:0;
-    background:#000; transition:opacity .15s;
-    clip-path: polygon(evenodd,
-      0% 0%, 100% 0%, 100% 100%, 0% 100%,
-      calc(50% + 19.36vh) calc(50% - 40.00vh), calc(50% + 19.36vh) calc(50% - 30.00vh),
-      calc(50% + 31.22vh) calc(50% - 30.00vh), calc(50% + 31.22vh) calc(50% - 20.00vh),
-      calc(50% + 37.08vh) calc(50% - 20.00vh), calc(50% + 37.08vh) calc(50% - 10.00vh),
-      calc(50% + 39.69vh) calc(50% - 10.00vh), calc(50% + 39.69vh) 50%,
-      calc(50% + 39.69vh) 50%, calc(50% + 39.69vh) calc(50% + 10.00vh),
-      calc(50% + 37.08vh) calc(50% + 10.00vh), calc(50% + 37.08vh) calc(50% + 20.00vh),
-      calc(50% + 31.22vh) calc(50% + 20.00vh), calc(50% + 31.22vh) calc(50% + 30.00vh),
-      calc(50% + 19.36vh) calc(50% + 30.00vh), calc(50% + 19.36vh) calc(50% + 40.00vh),
-      calc(50% - 19.36vh) calc(50% + 40.00vh), calc(50% - 19.36vh) calc(50% + 30.00vh),
-      calc(50% - 31.22vh) calc(50% + 30.00vh), calc(50% - 31.22vh) calc(50% + 20.00vh),
-      calc(50% - 37.08vh) calc(50% + 20.00vh), calc(50% - 37.08vh) calc(50% + 10.00vh),
-      calc(50% - 39.69vh) calc(50% + 10.00vh), calc(50% - 39.69vh) 50%,
-      calc(50% - 39.69vh) 50%, calc(50% - 39.69vh) calc(50% - 10.00vh),
-      calc(50% - 37.08vh) calc(50% - 10.00vh), calc(50% - 37.08vh) calc(50% - 20.00vh),
-      calc(50% - 31.22vh) calc(50% - 20.00vh), calc(50% - 31.22vh) calc(50% - 30.00vh),
-      calc(50% - 19.36vh) calc(50% - 30.00vh), calc(50% - 19.36vh) calc(50% - 40.00vh)); }
-  #scopeVignette.on { opacity:1; }
   #scopeNotches { position:absolute; left:50%; top:50%; transform:translateX(-50%);
     display:none; pointer-events:none; }
   #scopeNotches.on { display:block; }
@@ -330,7 +302,6 @@
   <div id="vignette"></div>
 
   <div id="hud">
-    <div id="scopeVignette"></div>
     <div id="crosshair"></div><div id="hitmark"></div>
     <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
