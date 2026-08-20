@@ -209,8 +209,17 @@ export function makeNametag(name, team) {
   const g2 = c.getContext('2d');
   g2.font = '700 30px system-ui, sans-serif';
   g2.textAlign = 'center';
-  g2.shadowColor = 'rgba(0,0,0,.8)';
-  g2.shadowBlur = 6;
+  // A hard-edged stroke outline instead of a blurred drop shadow — same
+  // fix as the crosshair and the scope reticle earlier in this pass: a
+  // shadowBlur reads as a soft halo/gradient around the letters at a
+  // nametag's small on-screen scale, not a clean shadow. Stroke first so
+  // it forms an outline behind the letter shapes, then fill on top so the
+  // team color shows through the middle — 'round' joins keep the corners
+  // of the outline from spiking at the sharp angles inside letterforms.
+  g2.lineJoin = 'round';
+  g2.lineWidth = 4;
+  g2.strokeStyle = 'rgba(0,0,0,.85)';
+  g2.strokeText(name, 128, 38);
   g2.fillStyle = team === 'blue' ? '#a8bcff' : '#b5ecb5';
   g2.fillText(name, 128, 38);
   const s = new THREE.Sprite(new THREE.SpriteMaterial({
