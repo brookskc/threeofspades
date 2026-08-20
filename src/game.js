@@ -308,6 +308,18 @@ const hud = {
     v.style.transition = 'none'; v.style.opacity = 1;
     requestAnimationFrame(() => { v.style.transition = 'opacity .7s'; v.style.opacity = 0; });
   },
+  // bearing: radians, 0 = source straight ahead, computed by Game#_bearingTo.
+  // Same instant-flash-then-fade pattern as damage() above — snap the
+  // rotation and opacity in with transitions off, then re-enable the
+  // transition next frame so the browser actually animates the fade
+  // instead of jumping straight to the end state.
+  damageDir(bearing) {
+    const el = $('dmgDir');
+    el.style.transform = `rotate(${bearing}rad)`;
+    const c = el.firstElementChild;
+    c.style.transition = 'none'; c.style.opacity = 1;
+    requestAnimationFrame(() => { c.style.transition = 'opacity 1.5s linear'; c.style.opacity = 0; });
+  },
   respawn(t) {
     $('respawn').style.opacity = t > 0 ? 1 : 0;
     if (t > 0) $('respawn').textContent = `REDEPLOYING IN ${Math.ceil(t)}…`;
@@ -1093,6 +1105,25 @@ export class Game {
     this._hostRelayChat(id, p.team, text, scope);
   }
 
+  // Bearing of a world point relative to the LOCAL player's own current
+  // facing — 0 = straight ahead, +PI/2 = directly right, -PI/2 = directly
+  // left, ±PI = directly behind. Same forward/right convention used
+  // everywhere else in this game (f=(cos(yaw),-sin(yaw)), r=(sin(yaw),cos(yaw)),
+  // matching the normal WASD movement code and the flycam) — just run
+  // through atan2 for the full angle instead of a single dot product the
+  // way sfx.at()'s audio panning does. Panning only ever needed "how far
+  // left or right am I," which a dot product against the right vector
+  // alone gives you; a screen-edge indicator needs the full circle, since
+  // a hit from directly behind has to read differently from a hit from
+  // the side, not just collapse to the same "no left/right bias" value.
+  _bearingTo(pos) {
+    const yaw = this.player.yaw, p = this.player.body.pos;
+    const fx = Math.cos(yaw), fz = -Math.sin(yaw);
+    const rx = -fz, rz = fx;
+    const dx = pos.x - p.x, dz = pos.z - p.z;
+    return Math.atan2(dx * rx + dz * rz, dx * fx + dz * fz);
+  }
+
   // Shared by every attack that can attribute a single attacker (gunfire,
   // melee, grenades) — decides whether that attacker sees/hears a plain
   // hit or a kill confirmation. Always call this AFTER damage() has
@@ -1105,12 +1136,28 @@ export class Game {
     else if (attacker.isRemote) this.net.sendTo(attacker.id, { t: 'e', k: 'hit', kill: killed });
   }
 
-  damage(victim, amount, attacker) {
+  // sourcePos is optional and defaults to the attacker's own position —
+  // right for gunfire/melee, where the shooter IS the source. Grenades
+  // pass it explicitly as the blast center: the thrower can be standing
+  // somewhere completely different by the time their nade goes off, so
+  // "which way did this come from" has to mean the explosion, not
+  // wherever they've since moved to.
+  damage(victim, amount, attacker, sourcePos) {
     if (victim.protT > 0) return; // spawn protection: brief, breaks on fire
     if (!victim.alive || this.over) return;
     victim.health -= amount;
     victim.alert?.(attacker); // bots whirl toward whoever shot them
-    if (victim === this.player) { hud.damage(); sfx.hurt(); hud.health(this.player); }
+    const src = sourcePos ?? attacker?.body?.pos;
+    if (victim === this.player) {
+      hud.damage(); sfx.hurt(); hud.health(this.player);
+      if (src) hud.damageDir(this._bearingTo(src));
+    } else if (victim.isRemote && src && victim.health > 0) {
+      // Non-lethal only: a dying guest is already headed into the crumple
+      // + flycam sequence over on Player#die, and there's nothing left to
+      // react to by the time this would land — no point telling someone
+      // which way to look after the fight's already over for them.
+      this.net.sendTo(victim.id, { t: 'e', k: 'dmgdir', x: src.x, z: src.z });
+    }
     if (victim.health <= 0) victim.die(attacker);
   }
 
@@ -1362,7 +1409,7 @@ export class Game {
       // 75 damage through solid stone. Point blank (inside the crater) still
       // kills regardless — you were standing in the fireball.
       if (d > R && !this.losClear(g.pos, center)) continue;
-      this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner);
+      this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner, g.pos);
       // Unlike gunfire/melee (which only ever loop foesOf, excluding your
       // own team including yourself), this loop is entities() — everyone,
       // no team filter — so a grenade that catches its own thrower is a
@@ -1994,7 +2041,12 @@ export class Game {
       const [x, y, z, ry, health, alive, carrier, tool, blocks, crouch, nades] = r;
       if (idx === this.myIdx) {
         if (!alive && this.player.alive) this._clientDied();
-        if (health < this._lastHealth) { hud.damage(); sfx.hurt(); }
+        // No hud.damage()/sfx.hurt() here anymore — damage() is the sole
+        // place health ever decreases (verified directly, not assumed),
+        // so every drop this would have caught already went through the
+        // new explicit 'dmgdir' message above, which carries the actual
+        // source position this snapshot-diff never had. Firing both would
+        // have doubled the flash/sound on every single hit.
         this._lastHealth = health;
         this.player.health = health;
         this.player.blocks = blocks;
@@ -2115,6 +2167,7 @@ export class Game {
         if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
         break;
       case 'hit': d.kill ? sfx.kill() : sfx.hit(); hud.hitmark(d.kill); break;
+      case 'dmgdir': hud.damageDir(this._bearingTo({ x: d.x, z: d.z })); break;
       case 'chat':
         hud.chatMsg({ name: cleanName(d.name), team: d.team === 'blue' ? 'blue' : 'green',
                       text: String(d.text ?? '').slice(0, 120), scope: d.scope });

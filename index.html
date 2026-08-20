@@ -217,6 +217,21 @@
     55%{opacity:1; transform:translate(-50%,-50%) rotate(45deg) scale(1.15);}
     100%{opacity:0; transform:translate(-50%,-50%) rotate(45deg) scale(1);} }
 
+  /* Damage direction: a flat, hard-edged chevron at the screen edge,
+     rotated by hud.damageDir()'s bearing (0 = the source is straight
+     ahead, so the chevron sits at the top pointing down at you — the
+     rotation carries the shape with it, so it always points inward
+     toward center no matter which edge it lands on). One shared element,
+     not one per hit: a new hit snaps opacity back to 1 and restarts the
+     fade rather than stacking a second chevron, so a stream of hits from
+     the same direction reads as "still under fire" instead of clutter.
+     Same danger red as the kill hitmark, same flat/no-blur language as
+     the rest of this HUD — no gradient, no glow. */
+  #dmgDir { position:fixed; left:50%; top:50%; width:0; height:0; pointer-events:none; }
+  #dmgDir .chevron { position:absolute; left:-13px; top:-190px; opacity:0;
+    width:0; height:0; border-left:13px solid transparent; border-right:13px solid transparent;
+    border-top:20px solid rgba(224,90,74,.92); }
+
   .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
     border-radius:6px; backdrop-filter:blur(3px); }
   #vitals { left:22px; bottom:22px; min-width:210px; }
@@ -316,6 +331,7 @@
 
   <div id="hud">
     <div id="crosshair"></div><div id="hitmark"></div>
+    <div id="dmgDir"><div class="chevron"></div></div>
     <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>
