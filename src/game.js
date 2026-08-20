@@ -963,7 +963,20 @@ export class Game {
     }
 
     if (hit) {
-      const dmg = spec.damage * (head ? (spec.headMult ?? 1.5) : 1);
+      // Sniper-only close-range penalty: the one mechanical gap in an
+      // otherwise well-costed weapon was that its accuracy and damage were
+      // exactly as good at point-blank as at range — no scope-sway, no
+      // minimum-range falloff, nothing that made it worse in a fight it
+      // wasn't supposed to win. This ramps damage from half at point-blank
+      // up to full by 15 units, using the ACTUAL resolved hit distance
+      // (hitT) rather than guessing a target's range before the shot even
+      // fires — headshots stay comfortably lethal at any range (247.5×0.5
+      // = 124, still a clean kill: skillful aim should always pay off) —
+      // it's specifically the free 2-shot BODY kill at any range, including
+      // a shotgun-range rush, that this removes (90×0.5=45, now needs a
+      // 3rd hit up close, which the slow interval makes genuinely costly).
+      const closeMul = spec.key === 'sniper' ? Math.min(1, 0.5 + 0.5 * (hitT / 15)) : 1;
+      const dmg = spec.damage * (head ? (spec.headMult ?? 1.5) : 1) * closeMul;
       this.damage(hit, dmg, shooter);
       // hit was drawn from alive-only foes above, so !hit.alive here means
       // THIS shot is what did it — not just "they happen to be dead."

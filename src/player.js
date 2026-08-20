@@ -34,7 +34,7 @@ export const TOOLS = [
   // gun ALSO being inherently inaccurate on top of that. Highest headMult
   // in the game: a clean headshot at range is a real kill (90*2.75=247.5,
   // comfortably over 100hp); a body hit alone (90) isn't automatic.
-  { key: 'sniper', name: 'SNIPER', damage: 90, headMult: 2.75, interval: 1.25, spread: 0.0006,
+  { key: 'sniper', name: 'SNIPER', damage: 90, headMult: 2.75, interval: 1.35, spread: 0.0006,
     mag: 5, reload: 3.0, auto: false, zoom: 4, kick: 0.04, aimSpread: 0.3, dropVel: 290, punch: 1.0 },
 ];
 // Which TOOLS slots are "class" guns for the one-gun-per-life restriction —
@@ -507,7 +507,15 @@ export class Player {
     const aiming = this.mouseDown[2] && TOOLS[this.tool].zoom !== undefined;
     const targetFov = aiming ? BASE_FOV / TOOLS[this.tool].zoom : BASE_FOV;
     if (Math.abs(this.camera.fov - targetFov) > 0.1) {
-      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 14);
+      // Ease rate scales inversely with zoom — "a heavier, more magnified
+      // optic takes proportionally longer to shoulder and stabilize."
+      // Barely touches rifle (14/1.5≈9.3) or smg (14/1.2≈11.7), both
+      // already so close to 1x that the difference is hard to notice;
+      // sniper (14/4=3.5) is a genuine ~4x slower scope-in, specifically
+      // to cost something for quick-scoping into a close fight rather than
+      // holding a deliberate long-range position.
+      const easeRate = 14 / TOOLS[this.tool].zoom;
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * easeRate);
       this.camera.updateProjectionMatrix();
     }
     this._updateScopeNotches(aiming);
