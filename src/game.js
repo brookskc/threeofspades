@@ -2168,7 +2168,7 @@ export class Game {
       }
       if (p.alive && b.onGround) {
         p._stepAcc = (p._stepAcc ?? 0) + moved;
-        if (p._stepAcc >= 2.2) { p._stepAcc = 0; sfx.step(); }
+        if (p._stepAcc >= 2.2) { p._stepAcc = 0; sfx.step(0.45); }
       }
     }
     if (this.player.alive) this.player.update(dt);
@@ -2248,7 +2248,7 @@ export class Game {
       e._stepAcc += moved;
       if (e._stepAcc >= 2.2) {
         e._stepAcc = 0;
-        if (e === this.player) sfx.step();       // your own feet: centered
+        if (e === this.player) sfx.step(0.45);     // your own feet: centered, quieter than everyone else's
         else sfx.at('step', b.pos);              // everyone else: placed
       }
     }

@@ -95,7 +95,13 @@ export const sfx = {
   lose:      () => [392, 330, 262].forEach((f, i) => tone({ freq: f, dur: 0.22, type: 'triangle', gain: 0.25, delay: i * 0.14 })),
   respawn:   () => tone({ freq: 440, dur: 0.1, type: 'triangle', gain: 0.2, slide: 220 }),
   click:     () => tone({ freq: 700, dur: 0.04, type: 'square', gain: 0.1 }),
-  step:      () => burst({ dur: 0.05, freq: 550 + Math.random() * 250, gain: 0.16 }),
+  // scale defaults to 1 so sfx.at('step', ...) below (everyone else's
+  // footsteps) is completely unaffected — this only exists to let the
+  // LOCAL player's own steps be quieter than the positional version used
+  // to hear someone else's. Without a parameter here, your own steps
+  // would have needed a second, separate sfx entry just to differ from
+  // the shared function sfx.at() also calls internally for others.
+  step:      (scale = 1) => burst({ dur: 0.05, freq: 550 + Math.random() * 250, gain: 0.16 * scale }),
   slide:     () => burst({ dur: 0.32, freq: 620, gain: 0.3, q: 0.7 }),
   // Positional variant: sfx.at('step', {x,y,z}) pans by bearing off the
   // listener's right ear and fades with distance; past 70 blocks, silence.
