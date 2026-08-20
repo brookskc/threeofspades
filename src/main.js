@@ -275,7 +275,11 @@ async function migrateRoom(deadNet) {
       // be the only thing that calls it. 'taken' means someone beat us to the
       // baton: also fall through and knock.
     }
-    const k = await Net._knock(guest, migCode, game.player.name, 15000);
+    // undefined team: the host already knows this connection's team from
+    // the roster entry it kept across the migration (see the migIdx branch
+    // in hostOnData) and never even looks at d.team for a rejoin — this
+    // just keeps the positional args lined up with _knock's real signature.
+    const k = await Net._knock(guest, migCode, game.player.name, undefined, 15000);
     console.debug(`[mig] gen${gen} knock ${migCode} -> ${k.kind}`);
     if (net !== deadNet) { k.conn?.close(); return; }
     if (k.kind === 'join') return adoptMigratedClient(guest, k.conn, migCode, k.welcome, gen);
@@ -436,6 +440,52 @@ const mapPref = $('mapPref'), modePref = $('modePref');
   renderStartClass();
 }
 
+// Team preference — the player's own side, chosen before deploying.
+// Host/solo: applied directly to game.player.team, a live-recoloring
+// setter (same mechanism _rotate() already uses for map-to-map team
+// swaps), so the block color etc. update immediately. A guest can't
+// assign itself a team though — the host owns that decision and answers
+// with one in its welcome message (see Game#_hostAddPlayer) — so for a
+// guest this only sets what preference rides along in the join handshake;
+// teamPref() below is what every join call site actually reads. 'auto'
+// (or never touching this at all) means what it always meant: the host's
+// own count-balance pick, completely unchanged.
+{
+  const opts = document.querySelectorAll('#startTeamOpts .opt');
+  function renderStartTeam() {
+    let pref;
+    try { pref = localStorage.getItem('tos.team'); } catch { pref = null; }
+    for (const el of opts) el.classList.toggle('picked', el.dataset.team === (pref ?? 'auto'));
+  }
+  for (const el of opts) {
+    el.addEventListener('click', () => {
+      const val = el.dataset.team;
+      try {
+        if (val === 'auto') localStorage.removeItem('tos.team');
+        else localStorage.setItem('tos.team', val);
+      } catch { /* best effort */ }
+      // Live preview for host/solo; a guest's choice here is only ever a
+      // preview too, since the host's welcome message is what actually
+      // decides and will correct this the moment a join resolves.
+      if (val === 'green' || val === 'blue') game.player.team = val;
+      renderStartTeam();
+    });
+  }
+  renderStartTeam();
+}
+
+// Reads the preference the picker above sets, or undefined if the player
+// never touched it ('auto') — this is what every fresh-join call site
+// sends so the host can honor it. Migration/rejoin knocks don't use this:
+// the host already knows a rejoining player's team from the roster entry
+// it kept across the handoff, and never even looks at it for that path.
+function teamPref() {
+  try {
+    const v = localStorage.getItem('tos.team');
+    return (v === 'green' || v === 'blue') ? v : undefined;
+  } catch { return undefined; }
+}
+
 // Returns the map index to start the new room on: the pinned map if it's
 // mode-compatible, else a random pick from the maps this mode supports.
 function applyHostPrefs() {
@@ -485,7 +535,7 @@ $('joinBtn').addEventListener('click', () => {
   status('connecting…');
   const n = Net.join(code, {});
   adoptJoin(n, code);
-  n.handlers.onOpen = () => n.send({ t: 'hi', name: game.player.name });
+  n.handlers.onOpen = () => n.send({ t: 'hi', name: game.player.name, team: teamPref() });
   if (document.pointerLockElement === renderer.domElement) setPlaying(true);
 });
 
@@ -524,11 +574,11 @@ $('quickBtn').addEventListener('click', async () => {
   $('menu').classList.add('searching');
   status('searching for a public room…');
   try {
-    let r = await Net.quickScan(game.player.name, qmTimeout);
+    let r = await Net.quickScan(game.player.name, teamPref(), qmTimeout);
     if (r.kind === 'full-all') { // one retry: a room may have just opened up
       status('all rooms full — rescanning…');
       await new Promise(res => setTimeout(res, 1500));
-      r = await Net.quickScan(game.player.name, qmTimeout);
+      r = await Net.quickScan(game.player.name, teamPref(), qmTimeout);
     }
     if (searchCanceled) { r.net?.destroy(); return; } // bailed with Esc mid-search
     $('menu').classList.remove('searching');
@@ -631,7 +681,7 @@ async function joinFromBrowser(room) {
   const lock = renderer.domElement.requestPointerLock(); // gesture-valid only now
   lock?.catch?.(() => {});
   browseSt.textContent = `joining ${MAPS[room.map]?.name ?? 'room'}…`;
-  const k = await Net._knock(guest, slotCode(room.slot), game.player.name, qmTimeout);
+  const k = await Net._knock(guest, slotCode(room.slot), game.player.name, teamPref(), qmTimeout);
   if (k.kind === 'join') {
     migrationGen = 0;
     game.mode = 'client';

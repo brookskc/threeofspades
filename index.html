@@ -266,6 +266,20 @@
   #startClassOpts { display:flex; gap:18px; justify-content:center; }
   #startClassOpts .opt { cursor:pointer; }
   #startClassOpts .opt:hover { opacity:.8; }
+  /* Team picker: same look/placement as the class picker above it, but the
+     picked color is the actual team color instead of a uniform gold — the
+     point here is literally "which side," so the swatch should look like
+     the side. */
+  #startTeamPick { margin-top:14px; font-size:12px; letter-spacing:2px;
+    text-transform:uppercase; }
+  #startTeamPick .lbl { opacity:.5; margin-bottom:4px; }
+  #startTeamOpts { display:flex; gap:18px; justify-content:center; }
+  #startTeamOpts .opt { opacity:.5; cursor:pointer; }
+  #startTeamOpts .opt:hover { opacity:.8; }
+  #startTeamOpts .opt.picked { opacity:1; }
+  #startTeamOpts .opt[data-team="green"].picked { color:var(--green); }
+  #startTeamOpts .opt[data-team="blue"].picked { color:var(--blue); }
+  #startTeamOpts .opt[data-team="auto"].picked { color:#ffd97a; }
 
   /* chat — lower left, above the vitals panel */
   #chat { position:absolute; left:22px; bottom:102px; width:380px; max-width:44vw;
@@ -378,6 +392,14 @@
         <span class="opt" data-cls="0">RIFLE</span>
         <span class="opt" data-cls="1">SMG</span>
         <span class="opt" data-cls="5">SNIPER</span>
+      </div>
+    </div>
+    <div class="prefs home-only" id="startTeamPick">
+      <div class="lbl">team</div>
+      <div id="startTeamOpts">
+        <span class="opt" data-team="auto">AUTO</span>
+        <span class="opt" data-team="green">GREEN</span>
+        <span class="opt" data-team="blue">BLUE</span>
       </div>
     </div>
     <div id="mapname" class="home-only">now showing — <b>GREENBELT</b></div>

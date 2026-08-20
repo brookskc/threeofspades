@@ -668,9 +668,18 @@ export class Game {
     this.player = new Player(this, camera, dom);
     // A solo/host session's own team was always green — every fight from
     // the same base, the same side of every map, permanently. Coin-flipped
-    // once here so hosting (or playing solo) doesn't mean owning one side
-    // forever; _rotate() flips it again on every map change from here on.
-    if (this.mode !== 'client' && Math.random() < 0.5) this.player.team = 'blue';
+    // once here (unless a saved team preference says otherwise — read with
+    // the same try/catch pattern the class preference already uses, since
+    // Game is constructed at page load, before the home screen's picker
+    // click handler could ever run to set this directly) so hosting (or
+    // playing solo) doesn't mean owning one side forever; _rotate() flips
+    // it again on every map change from here on either way.
+    if (this.mode !== 'client') {
+      let teamPref;
+      try { teamPref = localStorage.getItem('tos.team'); } catch { /* best effort */ }
+      if (teamPref === 'green' || teamPref === 'blue') this.player.team = teamPref;
+      else if (Math.random() < 0.5) this.player.team = 'blue';
+    }
     this.player.name = opts.name ?? 'You';
     this.hud = hud;
     this.chat = new Chat(this);
@@ -1540,7 +1549,7 @@ export class Game {
         return;
       }
       if (this.remote.has(id)) return; // duplicate hello (channel re-announce)
-      return this._hostAddPlayer(id, d.name);
+      return this._hostAddPlayer(id, d.name, d.team);
     }
     const p = this.remote.get(id);
     if (!p) return;
@@ -1624,19 +1633,29 @@ export class Game {
     return { t: 'r', p, b: this.bots.map(b => [b.id, b.name, b.team]) };
   }
 
-  _hostAddPlayer(id, rawName) {
+  _hostAddPlayer(id, rawName, teamPref) {
     if (this.remote.size + 1 >= MAX_HUMANS) { // room full — turn them away politely
       this.net.sendTo(id, { t: 'full' });
       setTimeout(() => this.net.conns.get(id)?.close(), 400); // let the packet land
       return;
     }
     const name = cleanName(rawName); // one sanitizer, one fallback ('Player')
-    // Count the host on its ACTUAL team: after a baton pass the promoted
-    // host can be blue, and hardcoding green stacked every joiner wrong.
-    const humans = { green: 0, blue: 0 };
-    humans[this.player.team] = 1;
-    for (const p of this.remote.values()) humans[p.team]++;
-    const team = humans.green <= humans.blue ? 'green' : 'blue';
+    let team;
+    if (teamPref === 'green' || teamPref === 'blue') {
+      // Honored outright, no cap enforced — a lopsided human count just
+      // means the other side's bot seats fill in instead, the same
+      // graceful fallback the roster already leans on everywhere else.
+      // teamPref is wire data from an untrusted client, so it's checked
+      // against the exact two valid values rather than trusted as-is.
+      team = teamPref;
+    } else {
+      // Count the host on its ACTUAL team: after a baton pass the promoted
+      // host can be blue, and hardcoding green stacked every joiner wrong.
+      const humans = { green: 0, blue: 0 };
+      humans[this.player.team] = 1;
+      for (const p of this.remote.values()) humans[p.team]++;
+      team = humans.green <= humans.blue ? 'green' : 'blue';
+    }
     const proxy = new RemoteProxy(this, id, name, team);
     proxy.ridx = this._nextPIdx++;
     this.remote.set(id, proxy);

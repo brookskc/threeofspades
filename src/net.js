@@ -106,7 +106,7 @@ export class Net {
   //   { kind: 'full' }  — room answered but is at capacity
   //   { kind: 'dead' }  — no such room / wedged / refused mid-knock
   //   { kind: 'down' }  — signaling unreachable
-  static _knock(peer, code, name, timeoutMs) {
+  static _knock(peer, code, name, team, timeoutMs) {
     return new Promise(resolve => {
       let settled = false;
       const done = v => {
@@ -125,7 +125,10 @@ export class Net {
       const onErr = e => done({ kind: e.type === 'peer-unavailable' ? 'dead' : 'down' });
       peer.on('error', onErr); // the broker reports unknown room ids on the peer
       const conn = peer.connect(PREFIX + code, { reliable: true });
-      conn.on('open', () => conn.send({ t: 'hi', name }));
+      // team is the player's own OPTIONAL side preference (undefined when
+      // they never set one) — the host honors it if given, falls back to
+      // its own balance pick otherwise. See Game#_hostAddPlayer.
+      conn.on('open', () => conn.send({ t: 'hi', name, team }));
       conn.on('data', d => {
         if (d.t === 'w') done({ kind: 'join', conn, welcome: d });
         else if (d.t === 'full') done({ kind: 'full' });
@@ -224,7 +227,7 @@ export class Net {
   // of minutes. Nobody waits minutes; they conclude the game is broken and
   // leave. The deadline is checked only before each SEQUENTIAL step (the
   // concurrent probe phase is already bounded by timeoutMs on its own).
-  static async quickScan(name, timeoutMs = 9000, overallMs = 20000) {
+  static async quickScan(name, team, timeoutMs = 9000, overallMs = 20000) {
     const guest = new Peer();
     const ready = new Promise((res, rej) => {
       guest.on('open', res);
@@ -252,7 +255,7 @@ export class Net {
         open.sort((a, b) => b.humans - a.humans || a.slot - b.slot);
         for (const room of open) {
           if (outOfTime()) { guest.destroy(); return { kind: 'timeout' }; }
-          const k = await Net._knock(guest, slotCode(room.slot), name, timeoutMs);
+          const k = await Net._knock(guest, slotCode(room.slot), name, team, timeoutMs);
           console.debug(`[qm] knock ${slotCode(room.slot)} -> ${k.kind}`);
           if (k.kind === 'join')
             return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: room.slot, welcome: k.welcome };
@@ -269,7 +272,7 @@ export class Net {
           // never lies about that, so the probe was a false negative (slow net).
           // Give a proven-live room one direct knock before moving on.
           if (outOfTime()) { guest.destroy(); return { kind: 'timeout' }; }
-          const k = await Net._knock(guest, slotCode(i), name, timeoutMs);
+          const k = await Net._knock(guest, slotCode(i), name, team, timeoutMs);
           console.debug(`[qm] knock ${slotCode(i)} (taken) -> ${k.kind}`);
           if (k.kind === 'join')
             return { kind: 'join', net: Net.adoptGuest(guest, k.conn), slot: i, welcome: k.welcome };
