@@ -36,9 +36,15 @@ export class Effects {
       this.tracers.push({ mesh: m, life: 0 });
     }
 
-    // Explosion flash — expanding fading sphere.
+    // Explosion flash — expanding fading box. Was a sphere; every other
+    // piece of visible geometry in this game is boxes (the flag redesign
+    // specifically tore out the one cylinder that ever existed, and the
+    // scope's own vignette got rebuilt for the same reason a few commits
+    // back) — this was the last one left. Diameter-2 box matches the old
+    // radius-1 sphere's reach along every axis exactly, so nothing about
+    // the flash's actual SIZE changes, only its silhouette.
     this.flash = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 20, 14),
+      new THREE.BoxGeometry(2, 2, 2),
       new THREE.MeshBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0,
         blending: THREE.AdditiveBlending, depthWrite: false })
     );
