@@ -153,9 +153,21 @@
   #hud { position:fixed; inset:0; pointer-events:none; z-index:10; opacity:0;
     transition:opacity .3s; }
   #hud.on { opacity:1; }
+  /* Square, not a circle — the crosshair was the last always-visible piece
+     of geometry in the whole game still shaped like something that isn't a
+     box (flagged, not fixed, in the last pass: it's the single most-seen
+     element on screen through nearly every moment of unscoped play, so it
+     deserved its own explicit go-ahead rather than being changed along
+     with the scope). Same 4px size as before — the visual weight players
+     are already used to didn't need to change, only the shape. The blur
+     is gone too: same zero-spread-radius outline trick already used for
+     the minimap's own frame (box-shadow:0 0 0 1px) rather than a soft
+     glow — a hard 1px edge instead of a blurred one, still giving the
+     dot contrast against a bright sky or snow, just without the one soft
+     edge left anywhere on screen. */
   #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-    width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.9);
-    box-shadow:0 0 4px rgba(0,0,0,.8); }
+    width:4px; height:4px; background:rgba(255,255,255,.9);
+    box-shadow:0 0 0 1px rgba(0,0,0,.85); }
   /* Sniper scope: a center reticle (a real "0 range" reference — the
      regular crosshair dot already fades out fully aimed, same as the
      rifle/smg iron sights, so without this there was NOTHING marking
