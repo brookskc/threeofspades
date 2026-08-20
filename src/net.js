@@ -3,7 +3,7 @@
 // ?ns=name scopes all peer ids — tests and events get their own universe.
 const ns = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)
   .get('ns')?.replace(/[^\w-]/g, '').slice(0, 16); // guarded for headless import
-const PREFIX = 'threeofspades-' + (ns ? ns + '-' : '');
+const PREFIX = 'spadework-' + (ns ? ns + '-' : '');
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 // Quick-match rendezvous: deterministic public room ids. Private codes are
