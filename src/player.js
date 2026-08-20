@@ -22,7 +22,15 @@ import { SX, SY, SZ } from './world.js';
 // actually feel like the heaviest gun in the game rather than being lumped
 // in with the SMG.
 export const TOOLS = [
-  { key: 'rifle', name: 'RIFLE', damage: 55, headMult: 2, interval: 0.55, spread: 0.0012,
+  // headMult 1.75, not 2 — a clean headshot on a full-health target does
+  // 55*1.75=96.25, a hair short of a guaranteed kill (100hp) rather than
+  // an automatic one. Was 2 (110, always lethal) until the sniper got its
+  // own close-range/ADS/interval costs added — at that point the rifle
+  // was the only weapon left with a one-shot-headshot promise and zero
+  // downside anywhere attached to it. This keeps the payoff real (any
+  // follow-up, even a stray hit from anything, finishes them) without it
+  // being the exact same absolute guarantee as the sniper's signature move.
+  { key: 'rifle', name: 'RIFLE', damage: 55, headMult: 1.75, interval: 0.55, spread: 0.0012,
     mag: 10, reload: 2.2, auto: false, zoom: 1.5, kick: 0.021, aimSpread: 0.5, dropVel: 410, punch: 0.9 },
   { key: 'smg', name: 'SMG', damage: 22, headMult: 1.6, interval: 0.1, spread: 0.02,
     mag: 30, reload: 1.8, auto: true, zoom: 1.2, kick: 0.0105, aimSpread: 0.7, dropVel: 225, punch: 0.35 },
