@@ -1836,8 +1836,19 @@ export class Game {
       // rejected (falling is fast and legitimate); only x/z are gated.
       const elapsed = Math.max(1 / 60, this.time - (p._lastPosT ?? this.time));
       const maxDist = MAX_SPEED * MAX_SPEED_SLACK * elapsed;
-      if (Math.hypot(nx - p.body.pos.x, nz - p.body.pos.z) > maxDist) p.body.pos.y = ny;
-      else p.body.pos.set(nx, ny, nz);
+      const speedOk = Math.hypot(nx - p.body.pos.x, nz - p.body.pos.z) <= maxDist;
+      const cx = speedOk ? nx : p.body.pos.x, cz = speedOk ? nz : p.body.pos.z;
+      // No-clip: speed-legal isn't enough on its own — the landing spot
+      // itself has to be somewhere the player's actual body could occupy.
+      // Reuses the exact whole-body AABB the physics itself already checks
+      // for real collision (Body#overlapsSolid mirrors _axis's box), as a
+      // pure query against this not-yet-applied candidate — no fake
+      // movement step needed to ask the question. Rejected outright rather
+      // than partially applied: there's no sensible "half accept" for a
+      // report that's claiming to be inside a wall. An honest client's own
+      // local physics already keeps it out of solid geometry in the first
+      // place, so this only ever catches a dishonest one.
+      if (!p.body.overlapsSolid(cx, ny, cz)) p.body.pos.set(cx, ny, cz);
       p._lastPosT = this.time;
       p.tool = d.tool;
       p.yaw = d.yaw;

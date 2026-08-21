@@ -15,6 +15,25 @@ export class Body {
     this.guard = false; // crouch edge-guard: refuse to walk off a real drop
   }
 
+  // Whole-body AABB overlap against solid terrain, at an ARBITRARY
+  // candidate position rather than this.pos — same box definition
+  // _axis's collision response already uses below (feet-center position,
+  // half-width, full height), but as a pure query: no movement, no
+  // velocity changes, no step-up or edge-guard side effects. Exists so
+  // the host can validate a guest's reported position before ever
+  // committing to it, without simulating a fake movement step to do it.
+  overlapsSolid(x, y, z) {
+    const h = this.half;
+    const x0 = Math.floor(x - h.x), x1 = Math.floor(x + h.x);
+    const y0 = Math.floor(y), y1 = Math.floor(y + h.h);
+    const z0 = Math.floor(z - h.x), z1 = Math.floor(z + h.x);
+    for (let yy = y0; yy <= y1; yy++)
+      for (let zz = z0; zz <= z1; zz++)
+        for (let xx = x0; xx <= x1; xx++)
+          if (this.world.solid(xx, yy, zz)) return true;
+    return false;
+  }
+
   // Axis-separated integration: move one axis at a time, clamp on collision.
   move(dt) {
     const g = this.inWater ? GRAVITY * 0.25 : GRAVITY;
