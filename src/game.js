@@ -232,11 +232,27 @@ const hud = {
   },
   // p is always the LOCAL player — this is purely personal HUD state,
   // never shown for anyone else's streak/piloting status.
-  airstrikeStatus(p) {
+  // p is always the LOCAL player — purely personal HUD state, never shown
+  // for anyone else's streak/ability status. Handles both abilities in
+  // one place since they share the same key and are mutually exclusive
+  // at any given streak level — one function deciding "what does F do
+  // right now" is safer than two independently-driven hints that could
+  // in principle disagree with each other.
+  streakStatus(p) {
     const ready = $('airstrikeReady');
-    if (ready) ready.style.display = (!p._piloting && (p._streak ?? 0) >= 10) ? 'block' : 'none';
+    if (ready) {
+      if (p._piloting || p._overchargeT > 0) ready.style.display = 'none';
+      else if ((p._streak ?? 0) >= 10) { ready.textContent = 'airstrike ready — [F]'; ready.style.display = 'block'; }
+      else if ((p._streak ?? 0) >= 5 && !(p._overchargeCd > 0)) { ready.textContent = 'overcharge ready — [F]'; ready.style.display = 'block'; }
+      else ready.style.display = 'none';
+    }
     const overlay = $('airstrikeHud');
     if (overlay) overlay.classList.toggle('on', !!p._piloting);
+    const active = $('overchargeActive');
+    if (active) {
+      if (p._overchargeT > 0) { active.textContent = `overcharge — ${Math.ceil(p._overchargeT)}s`; active.style.display = 'block'; }
+      else active.style.display = 'none';
+    }
   },
   score(g) {
     const next = g.hill
@@ -658,6 +674,7 @@ class RemoteProxy {
     this.alive = false;
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain
     this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
+    this._overchargeT = 0; this._overchargeCd = 0; // dying cancels an active buff outright
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1102,6 +1119,15 @@ export class Game {
     if (this.mode !== 'client') return this._confirmAirstrike(p, x, z);
     this.net.send({ t: 'a', k: 'strike', x, z });
   }
+  // No payload needed at all — "turn it on for me," nothing to target or
+  // aim. Same authority split as every other request* method: solo/host
+  // validates and activates directly against its own player object,
+  // a guest's own _overchargeT is never touched locally, only the host's
+  // authoritative copy (its RemoteProxy) is what damage() ever checks.
+  requestOvercharge(p) {
+    if (this.mode !== 'client') return this._activateOvercharge(p);
+    this.net.send({ t: 'a', k: 'overcharge' });
+  }
   requestDig(p) {
     if (this.mode !== 'client') return this.playerDig(p);
     this.net.send({ t: 'a', k: 'dig', o: arr(p.body.eye()), d: arr(p.lookDir()) });
@@ -1228,6 +1254,13 @@ export class Game {
   damage(victim, amount, attacker, sourcePos) {
     if (victim.protT > 0) return; // spawn protection: brief, breaks on fire
     if (!victim.alive || this.over) return;
+    // Overcharge: 1.5x damage dealt AND taken — a genuine risk/reward
+    // toggle, not a pure buff. Both checks apply independently and stack
+    // naturally if attacker and victim are BOTH overcharged at once
+    // (2.25x total) — a real, if rare, emergent case worth letting
+    // happen rather than specifically guarding against.
+    if (attacker?._overchargeT > 0) amount *= 1.5;
+    if (victim._overchargeT > 0) amount *= 1.5;
     victim.health -= amount;
     victim.alert?.(attacker); // bots whirl toward whoever shot them
     const src = sourcePos ?? attacker?.body?.pos;
@@ -1523,6 +1556,18 @@ export class Game {
     (this._pendingStrikes ??= []).push({ pos: new THREE.Vector3(x, y, z), owner: attacker, t: 3 });
   }
 
+  // Host/solo-authoritative, re-validated here for the same reason as
+  // above: a guest's claim that it's eligible is never trusted on its own.
+  // Does NOT spend the streak — unlike airstrike, this doesn't consume
+  // anything, it's a toggle you can trigger again the moment the cooldown
+  // clears, as many times as the streak stays alive to support it.
+  _activateOvercharge(p) {
+    if ((p._streak ?? 0) < 5 || p._overchargeT > 0 || p._overchargeCd > 0) return;
+    p._overchargeT = 10;
+    if (p === this.player) sfx.overcharge();
+    else if (p.isRemote) this.net.sendTo(p.id, { t: 'e', k: 'overcharge' });
+  }
+
   // Runs identically on host, solo, and every client that receives the
   // broadcast above — each machine independently draws its own copy of
   // the same marker at the same coordinates, the same way explodeAt's
@@ -1784,6 +1829,13 @@ export class Game {
       // pair the way shoot/dig/place/nade do.
       if (d.k === 'strike') {
         if (Number.isFinite(d.x) && Number.isFinite(d.z)) this._confirmAirstrike(p, d.x, d.z);
+        return;
+      }
+      // Overcharge carries no payload at all — "turn it on," nothing to
+      // aim or target — so it needs the exact same early-branch treatment
+      // as strike above, for the same reason: no o/d pair to validate.
+      if (d.k === 'overcharge') {
+        this._activateOvercharge(p);
         return;
       }
       if (!finite3(d.o) || !finite3(d.d)) return;
@@ -2308,6 +2360,13 @@ export class Game {
         this._telegraph(x, y, z);
         break;
       }
+      case 'overcharge':
+        // Confirmation from the host that activation succeeded — sets the
+        // SAME duration locally so this client's own countdown/HUD state
+        // matches what the host's authoritative copy is already running.
+        this.player._overchargeT = 10;
+        sfx.overcharge();
+        break;
       case 'col': { // host collapsed a structure: replay removal + dust only
         const cells = [];
         for (let i = 0; i + 2 < d.cells.length; i += 3) {
@@ -2461,7 +2520,7 @@ export class Game {
     this.world.animateSky(this.time);
     hud.minimap(this);
     hud.ping(this);
-    hud.airstrikeStatus(this.player);
+    hud.streakStatus(this.player);
     // The scoreboard mirrors the held key exactly: if a Tab keyup gets lost
     // to a pointer-lock hiccup or a window switch, the overlay can never
     // strand itself over the screen. Runs while dead too (TAB works there).
@@ -2491,6 +2550,14 @@ export class Game {
         s.t -= dt;
         if (s.t <= 0) { this._airstrikeImpact(s.pos, s.owner); this._pendingStrikes.splice(i, 1); }
       }
+    }
+    // RemoteProxy has no update(dt) of its own the way Player does — its
+    // state rides the network snapshot instead — so its Overcharge timer
+    // needs its own tick here specifically, on the host's authoritative
+    // copy, since that's the one damage() actually reads.
+    for (const rp of this.remote.values()) {
+      if (rp._overchargeT > 0) { rp._overchargeT -= dt; if (rp._overchargeT <= 0) { rp._overchargeT = 0; rp._overchargeCd = 5; } }
+      else if (rp._overchargeCd > 0) { rp._overchargeCd -= dt; if (rp._overchargeCd < 0) rp._overchargeCd = 0; }
     }
 
     if (this.player.alive) this.player.update(dt);

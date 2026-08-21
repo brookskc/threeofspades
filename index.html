@@ -270,11 +270,20 @@
   #airstrikeHud .label { position:absolute; left:50%; top:calc(50% + 34px);
     transform:translateX(-50%); font-size:13px; letter-spacing:2px; color:rgba(224,90,74,.9);
     text-transform:uppercase; white-space:nowrap; }
-  /* Shown whenever the streak is high enough to use, hidden the moment
-     targeting starts (the reticle above takes over as the active-state
-     indicator) — driven by hud.airstrikeStatus, checked once a frame. */
+  /* Shown whenever a streak ability is available and not currently in use
+     — text set dynamically by hud.streakStatus depending on which one
+     (airstrike at 10+, overcharge at 5-9), since they share this one
+     key/hint and are mutually exclusive at any given streak level. */
   #airstrikeReady { display:none; position:absolute; left:50%; bottom:80px;
     transform:translateX(-50%); font-size:14px; letter-spacing:2px; color:#ffd97a;
+    text-transform:uppercase; }
+  /* Overcharge's own active-state indicator — the counterpart to
+     airstrikeHud's reticle for the OTHER ability, showing time remaining
+     so a fight can be timed against it rather than the buff just
+     silently expiring mid-engagement with no warning. Same danger red as
+     the rest of this HUD's "something risky is happening" language. */
+  #overchargeActive { display:none; position:absolute; left:50%; bottom:80px;
+    transform:translateX(-50%); font-size:14px; letter-spacing:2px; color:#e05a4e;
     text-transform:uppercase; }
 
   .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
@@ -380,6 +389,7 @@
     <div id="killcallout"></div>
     <div id="airstrikeHud"><div class="reticle"></div><div class="label">airstrike — click to confirm</div></div>
     <div id="airstrikeReady">airstrike ready — [F]</div>
+    <div id="overchargeActive"></div>
     <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>

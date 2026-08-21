@@ -108,6 +108,12 @@ export const sfx = {
   // EVERYONE in range of hearing it, not just whoever called it in.
   telegraph: () => { for (let i = 0; i < 3; i++)
     tone({ freq: 1400, dur: 0.12, type: 'square', gain: 0.3, delay: i * 0.25 }); },
+  // Overcharge: a sawtooth rising sweep — a "power surge" character
+  // distinct from every other tone in this file (all sine/square/
+  // triangle elsewhere), matching that this is the one ability that
+  // makes the NEXT FEW SECONDS more dangerous for its own user too, not
+  // just a clean reward.
+  overcharge: () => tone({ freq: 220, dur: 0.5, type: 'sawtooth', gain: 0.3, slide: 380 }),
   pickup:    () => { tone({ freq: 520, dur: 0.09, gain: 0.22 }); tone({ freq: 780, dur: 0.12, gain: 0.22, delay: 0.09 }); },
   drop:      () => { tone({ freq: 500, dur: 0.09, gain: 0.2 }); tone({ freq: 320, dur: 0.12, gain: 0.2, delay: 0.09 }); },
   capture:   () => [523, 659, 784, 1046].forEach((f, i) => tone({ freq: f, dur: 0.16, type: 'triangle', gain: 0.28, delay: i * 0.1 })),
