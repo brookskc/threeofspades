@@ -60,6 +60,14 @@ export const MAX_HUMANS = Number.isInteger(capParam) ? Math.min(10, Math.max(2, 
 // moderate speed-hack sitting under the slack.
 const MAX_SPEED = 9;
 const MAX_SPEED_SLACK = 3;
+// Interest management: how close is "obviously aware of them regardless"
+// — footsteps, muzzle flash, standing right next to you — and also a
+// deliberate buffer against raycast edge cases exactly at point-blank
+// range (starting a ray essentially inside the target's own geometry).
+// No equivalent upper cap on the line-of-sight branch: a sniper with a
+// genuinely clear, unobstructed sightline across the map is legitimate
+// play here, not something to hide from them.
+const INTEREST_CLOSE_R = 8;
 // Bullet drop gravity — see Game#_dropCompensate. Matches the world's own
 // GRAVITY magnitude (entities.js) for internal consistency; each weapon's
 // dropVel is what actually tunes how much a given gun drops, same way the
@@ -970,6 +978,22 @@ export class Game {
     const dir = new THREE.Vector3().subVectors(b, a);
     const d = dir.length();
     return !this.world.raycast(a, dir.normalize(), d);
+  }
+
+  // Interest management: is `body` something `eye` could actually
+  // perceive right now — close range, or a genuinely clear sightline.
+  // Used by _broadcastSnapshot to decide, per connection, which rows of
+  // the snapshot that connection even needs to receive — closing the
+  // trivial wallhack this codebase had until now (every position sent to
+  // every client, every tick, regardless of walls or distance). Measured
+  // to center mass, matching the same reference point _blastDamage uses
+  // for cover checks, rather than ground-level feet — a raycast at foot
+  // height can clip through low terrain lips that wouldn't actually
+  // block a real sightline at eye/torso height.
+  _perceives(eye, body) {
+    const target = body.pos.clone().add(new THREE.Vector3(0, 0.9, 0));
+    if (eye.distanceTo(target) <= INTEREST_CLOSE_R) return true;
+    return this.losClear(eye, target);
   }
 
   // Bullet drop: no projectile, no travel time — the shot still resolves
@@ -2139,8 +2163,36 @@ export class Game {
   // omitted row means "unchanged", never "gone". A congested channel is
   // skipped WITHOUT updating its sent map, so the next tick resends
   // everything the skipped tick would have.
+  //
+  // Interest management layers on top of the same cur/rm machinery: a row
+  // that isn't perceptible to a given connection is simply never added to
+  // `cur` for that connection. The EXISTING removal logic below already
+  // treats "known before, missing from cur now" as "gone" — the client
+  // can't tell the difference between an entity leaving the room and one
+  // walking behind a wall, and doesn't need to; both correctly hide it.
+  // On re-entering interest (LOS restored, or closing distance),
+  // sent[key] no longer has an entry for that idx (the removal loop
+  // deleted it), so it comes back as `!prev` — a fresh row, not a stale
+  // diff against whatever it was doing while unseen.
+  //
+  // Uniform for every team, not just enemies: nothing in this codebase
+  // currently grants x-ray teammate awareness either (the minimap draws
+  // no player blips at all, only your own position) — so there's no
+  // existing feature to carve out an exemption for.
+  //
+  // Scope: this closes the wallhack for GUESTS receiving this broadcast.
+  // The host's own client still holds every live position directly in
+  // memory to run the simulation at all — a malicious host reading its
+  // own RemoteProxy/Bot objects locally is the separate, unsolved
+  // host-authority problem, not something a wire-level filter can touch.
   _broadcastSnapshot() {
     const snap = this.snapshot();
+    // idx -> live entity, built once per tick and shared across every
+    // connection's interest check below, instead of re-searching
+    // this.remote/this.bots for every row on every connection.
+    const byIdx = { p: new Map([[this._hostIdx, this.player]]), b: new Map() };
+    for (const p of this.remote.values()) byIdx.p.set(p.ridx, p);
+    for (const b of this.bots) byIdx.b.set(b.id, b);
     for (const [id, conn] of this.net.conns) {
       if (!conn.open) continue;
       if (conn.dataChannel?.bufferedAmount > 64 * 1024) continue;
@@ -2148,13 +2200,25 @@ export class Game {
       const out = { t: 's', f: snap.f, h: snap.h, c: snap.c, g: snap.g, o: snap.o };
       const pingTs = this.remote.get(id)?._pingTs;
       if (pingTs !== undefined) out.ts = pingTs;
+      const viewer = this.remote.get(id);
+      const eye = viewer?.body.eye();
       for (const key of ['p', 'b']) {
         const cur = new Set();
         out[key] = [];
         for (const row of snap[key]) {
-          cur.add(row[0]);
-          const prev = sent[key].get(row[0]);
-          if (!prev || !rowsEq(prev, row)) { out[key].push(row); sent[key].set(row[0], row); }
+          const idx = row[0];
+          // Never hide a connection's own row, and fail OPEN (show
+          // everything) if the viewer can't be resolved at all — a
+          // transient lookup gap should never blind someone outright,
+          // that's a far worse failure than briefly over-showing during
+          // an edge case that shouldn't occur in the first place.
+          if (eye && idx !== viewer.ridx) {
+            const ent = byIdx[key].get(idx);
+            if (!ent || !this._perceives(eye, ent.body)) continue;
+          }
+          cur.add(idx);
+          const prev = sent[key].get(idx);
+          if (!prev || !rowsEq(prev, row)) { out[key].push(row); sent[key].set(idx, row); }
         }
         const rm = [];
         for (const idx of sent[key].keys())
