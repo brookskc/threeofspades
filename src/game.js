@@ -230,6 +230,14 @@ const hud = {
     el.textContent = Math.round(ms) + ' ms';
     el.className = ms > 150 ? 'bad' : ms > 80 ? 'warn' : '';
   },
+  // p is always the LOCAL player — this is purely personal HUD state,
+  // never shown for anyone else's streak/piloting status.
+  airstrikeStatus(p) {
+    const ready = $('airstrikeReady');
+    if (ready) ready.style.display = (!p._piloting && (p._streak ?? 0) >= 10) ? 'block' : 'none';
+    const overlay = $('airstrikeHud');
+    if (overlay) overlay.classList.toggle('on', !!p._piloting);
+  },
   score(g) {
     const next = g.hill
       ? `<span class="g">GREEN ${holdClock(g.captures.green)}</span><span style="opacity:.4">—</span><span class="b">${holdClock(g.captures.blue)} BLUE</span>`
@@ -649,6 +657,7 @@ class RemoteProxy {
   die(killer) {
     this.alive = false;
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain
+    this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1081,6 +1090,18 @@ export class Game {
     this.effects.tracer(from.clone().addScaledVector(previewDir, 1.2).add(new THREE.Vector3(0, -0.12, 0)), end);
     this.net.send({ t: 'a', k: 'shoot', o: arr(from), d: arr(dir), tool: p.tool });
   }
+
+  // No local preview needed the way shooting has one — a confirmed target
+  // isn't rendered as anything until the host's telegraph message comes
+  // back and _telegraph() draws the marker, so this is just: tell the
+  // authority, wait to hear back. p is the caller's OWN player object in
+  // both branches — solo/host validates and spends the streak against it
+  // directly; a guest never touches its own _streak here at all, since
+  // the host's copy (the RemoteProxy) is the only one that counts.
+  requestAirstrike(p, x, z) {
+    if (this.mode !== 'client') return this._confirmAirstrike(p, x, z);
+    this.net.send({ t: 'a', k: 'strike', x, z });
+  }
   requestDig(p) {
     if (this.mode !== 'client') return this.playerDig(p);
     this.net.send({ t: 'a', k: 'dig', o: arr(p.body.eye()), d: arr(p.lookDir()) });
@@ -1183,6 +1204,11 @@ export class Game {
       if (attacker._mkCount >= 2) {
         tier = attacker._mkCount >= 4 ? 'multi' : attacker._mkCount === 3 ? 'triple' : 'double';
       }
+      // Killstreak: kills without dying, no time window at all — genuinely
+      // different rule from the multi-kill counter just above, which
+      // resets on a 5s gap. This one only resets on death (see each
+      // die()). Airstrike is the only thing gated on it right now.
+      attacker._streak = (attacker._streak ?? 0) + 1;
     }
     if (attacker === this.player) {
       hud.hitmark(killed); // the crosshair confirmation is unconditional — multi-kill or not, every kill gets it
@@ -1451,29 +1477,86 @@ export class Game {
       this.editLog.push(['b', g.pos.x, g.pos.y, g.pos.z, R]);
       this.net.broadcast({ t: 'e', k: 'boom', x: g.pos.x, y: g.pos.y, z: g.pos.z, r: R });
     }
-    // Blast damage: measured to center mass, not the eye — a grenade on the
-    // ground used to lose ~1.6 blocks of reach to eye height alone. Radius 9
-    // matches what the fireball looks like it should do, and 150 base means
-    // point blank (~3 blocks) kills outright.
-    const R_DMG = 9;
+    this._blastDamage(g.pos, g.owner, R, 9, 150, 15);
+  }
+
+  // Extracted from the original grenade-only version of _explode so
+  // Airstrike (below) can reuse the exact same damage-falloff-plus-cover
+  // logic at a bigger scale instead of duplicating the whole loop.
+  // craterR: below this range, always hits regardless of cover (you're
+  // standing in the fireball itself). dmgRadius/baseDamage/minDamage:
+  // linear falloff from baseDamage at the center to minDamage at the edge.
+  _blastDamage(pos, owner, craterR, dmgRadius, baseDamage, minDamage) {
     for (const e of this.entities()) {
       if (!e.alive) continue;
+      // Measured to center mass, not the eye — a shot to the ground under
+      // someone used to lose real reach to eye height alone.
       const center = e.body.pos.clone().add(new THREE.Vector3(0, 0.9, 0));
-      const d = g.pos.distanceTo(center);
-      if (d >= R_DMG) continue;
-      // Cover has to mean something: the crater is only 2.4 blocks, so
-      // without this a grenade behind a wall it never breached still dealt
-      // 75 damage through solid stone. Point blank (inside the crater) still
-      // kills regardless — you were standing in the fireball.
-      if (d > R && !this.losClear(g.pos, center)) continue;
-      this.damage(e, Math.max(15, 150 * (1 - d / R_DMG)), g.owner, g.pos);
-      // Unlike gunfire/melee (which only ever loop foesOf, excluding your
-      // own team including yourself), this loop is entities() — everyone,
-      // no team filter — so a grenade that catches its own thrower is a
-      // real, reachable case here. Self-damage still applies above; it
-      // just shouldn't ring a "kill confirmed" chime for blowing yourself up.
-      if (e !== g.owner) this._hitFeedback(g.owner, !e.alive);
+      const d = pos.distanceTo(center);
+      if (d >= dmgRadius) continue;
+      // Cover has to mean something: without this, a blast behind a wall
+      // it never breached still dealt damage through solid stone.
+      if (d > craterR && !this.losClear(pos, center)) continue;
+      this.damage(e, Math.max(minDamage, baseDamage * (1 - d / dmgRadius)), owner, pos);
+      // Grenades can catch their own thrower (this loop is entities(), no
+      // team filter, unlike gunfire/melee which only ever loop foesOf) —
+      // self-damage still applies, it just shouldn't ring a "kill
+      // confirmed" chime for blowing yourself up.
+      if (e !== owner) this._hitFeedback(owner, !e.alive);
     }
+  }
+
+  // Host/solo-authoritative — re-validates the streak against the
+  // attacker's OWN authoritative copy rather than trusting whatever a
+  // guest claims, and re-clamps the target coordinates: this is wire data
+  // from requestAirstrike's client branch, same untrusted-input treatment
+  // every other player-originated network message gets in this codebase.
+  // Spends the streak HERE, not when piloting mode was entered — cancel
+  // out of targeting with no shot fired and nothing was ever charged.
+  _confirmAirstrike(attacker, x, z) {
+    if ((attacker._streak ?? 0) < 10) return;
+    x = Math.max(0, Math.min(SX, x)); z = Math.max(0, Math.min(SZ, z));
+    attacker._streak = 0;
+    const y = this.world.surface(Math.floor(x), Math.floor(z)) + 1;
+    if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'telegraph', x, y, z });
+    this._telegraph(x, y, z);
+    (this._pendingStrikes ??= []).push({ pos: new THREE.Vector3(x, y, z), owner: attacker, t: 3 });
+  }
+
+  // Runs identically on host, solo, and every client that receives the
+  // broadcast above — each machine independently draws its own copy of
+  // the same marker at the same coordinates, the same way explodeAt's
+  // visual/terrain side already works on both ends of the connection.
+  // Grenades give zero warning; this is the one explosion in the game
+  // that's supposed to, so the whole point of the marker (and the delay
+  // in _confirmAirstrike above) is giving the target team a real chance
+  // to see it coming and get clear — not free, unavoidable damage.
+  _telegraph(x, y, z) {
+    sfx.telegraph();
+    if (!this._strikeMarker) {
+      const geo = new THREE.BoxGeometry(1.5, 60, 1.5);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xe05a4e, transparent: true, opacity: 0.55, depthWrite: false });
+      this._strikeMarker = new THREE.Mesh(geo, mat);
+      this.scene.add(this._strikeMarker);
+    }
+    this._strikeMarker.position.set(x, y + 30, z);
+    this._strikeMarker.visible = true;
+    this._markerT = 3; // ticked down in update() below, on every machine — no explicit "hide" message needed, it just matches the 3s delay above
+    this.feed('AIRSTRIKE INBOUND');
+  }
+
+  // A genuinely bigger, more dangerous explosion than a hand grenade —
+  // meant to read as a different scale of munition entirely, matching a
+  // 10-kill streak's worth of buildup. Same explodeAt + editLog/'boom'
+  // sync pattern as a grenade, just larger numbers throughout.
+  _airstrikeImpact(pos, owner) {
+    const R = 4.5;
+    this.explodeAt(pos.x, pos.y, pos.z, R, owner);
+    if (this.mode === 'host') {
+      this.editLog.push(['b', pos.x, pos.y, pos.z, R]);
+      this.net.broadcast({ t: 'e', k: 'boom', x: pos.x, y: pos.y, z: pos.z, r: R });
+    }
+    this._blastDamage(pos, owner, R, 14, 180, 20);
   }
 
   // Visual + terrain side of an explosion — identical on host and clients.
@@ -1691,6 +1774,18 @@ export class Game {
       // no extra message, just one more number on traffic already flowing.
       if (Number.isFinite(d.ts)) p._pingTs = d.ts;
     } else if (d.t === 'a' && p.alive && !this.over) {
+      // Airstrike is handled first and separately: unlike every other
+      // action here, its target isn't near the sender's own position (the
+      // whole point is calling in a strike somewhere else entirely, while
+      // piloting the overhead camera from a frozen body) — the "must
+      // originate near the proxy's known position" sanity check just
+      // below doesn't apply and would incorrectly reject every legitimate
+      // request, plus this message never carries an o/d origin+direction
+      // pair the way shoot/dig/place/nade do.
+      if (d.k === 'strike') {
+        if (Number.isFinite(d.x) && Number.isFinite(d.z)) this._confirmAirstrike(p, d.x, d.z);
+        return;
+      }
       if (!finite3(d.o) || !finite3(d.d)) return;
       const o = v3(d.o), dir = v3(d.d).normalize();
       // Sanity: actions must originate near the proxy's known position.
@@ -2195,9 +2290,22 @@ export class Game {
       case 'boom': {
         // The host is untrusted input like anyone else: an oversized radius
         // would let a patched host crater the whole map on every client.
-        const r = Math.min(Math.max(d.r ?? 0, 0), 4);
+        // Raised from 4 to 6 when airstrike landed — its own crater is
+        // 4.5, comfortably under the new cap with headroom, while 6 is
+        // still tiny relative to the 256x256 map, so the original intent
+        // (can't crater the whole map) still holds.
+        const r = Math.min(Math.max(d.r ?? 0, 0), 6);
         this.explodeAt(d.x, d.y, d.z, r);
         this.editLog.push(['b', d.x, d.y, d.z, r]);
+        break;
+      }
+      case 'telegraph': {
+        // Untrusted host input again — clamp coordinates into the map
+        // bounds before drawing anything, same discipline as 'boom' above.
+        const x = Math.max(0, Math.min(SX, d.x ?? 0));
+        const y = Math.max(0, Math.min(SY, d.y ?? 0));
+        const z = Math.max(0, Math.min(SZ, d.z ?? 0));
+        this._telegraph(x, y, z);
         break;
       }
       case 'col': { // host collapsed a structure: replay removal + dust only
@@ -2353,6 +2461,7 @@ export class Game {
     this.world.animateSky(this.time);
     hud.minimap(this);
     hud.ping(this);
+    hud.airstrikeStatus(this.player);
     // The scoreboard mirrors the held key exactly: if a Tab keyup gets lost
     // to a pointer-lock hiccup or a window switch, the overlay can never
     // strand itself over the screen. Runs while dead too (TAB works there).
@@ -2362,7 +2471,27 @@ export class Game {
       const p = this.player, e = p.body.eye();
       setListener({ x: e.x, y: e.y, z: e.z, rx: Math.sin(p.yaw), rz: Math.cos(p.yaw) });
     }
+    // Marker fade runs unconditionally, before the client/host split below
+    // — every machine independently draws its own copy of this mesh (see
+    // _telegraph), so every machine needs to independently time out its
+    // own copy too, host and guests alike, not just whichever one is
+    // authoritative for the actual strike.
+    if (this._strikeMarker && this._strikeMarker.visible) {
+      this._markerT -= dt;
+      if (this._markerT <= 0) this._strikeMarker.visible = false;
+    }
     if (this.mode === 'client') { this._clientUpdate(dt); this.world.flushDirty(); return; }
+
+    // Pending airstrikes: host/solo only, since only this side is
+    // authoritative for when damage actually lands. Iterated backward so
+    // splicing a finished one out mid-loop never skips the next entry.
+    if (this._pendingStrikes) {
+      for (let i = this._pendingStrikes.length - 1; i >= 0; i--) {
+        const s = this._pendingStrikes[i];
+        s.t -= dt;
+        if (s.t <= 0) { this._airstrikeImpact(s.pos, s.owner); this._pendingStrikes.splice(i, 1); }
+      }
+    }
 
     if (this.player.alive) this.player.update(dt);
     else this.player.deathCam(dt);

@@ -102,6 +102,12 @@ export const sfx = {
   hurt:      () => { tone({ freq: 220, dur: 0.15, type: 'sawtooth', gain: 0.3, slide: -140 }); },
   throw_:    () => burst({ dur: 0.09, freq: 2000, gain: 0.15 }),
   explosion: () => { burst({ dur: 0.9, freq: 500, gain: 1.0 }); tone({ freq: 70, dur: 0.7, type: 'sine', gain: 0.6, slide: -40 }); },
+  // Airstrike telegraph: three sharp, evenly-spaced beeps — deliberately
+  // harsh (square wave, not the kill chime's warm sine) and mechanical,
+  // reading as "incoming" rather than "reward," since this fires for
+  // EVERYONE in range of hearing it, not just whoever called it in.
+  telegraph: () => { for (let i = 0; i < 3; i++)
+    tone({ freq: 1400, dur: 0.12, type: 'square', gain: 0.3, delay: i * 0.25 }); },
   pickup:    () => { tone({ freq: 520, dur: 0.09, gain: 0.22 }); tone({ freq: 780, dur: 0.12, gain: 0.22, delay: 0.09 }); },
   drop:      () => { tone({ freq: 500, dur: 0.09, gain: 0.2 }); tone({ freq: 320, dur: 0.12, gain: 0.2, delay: 0.09 }); },
   capture:   () => [523, 659, 784, 1046].forEach((f, i) => tone({ freq: f, dur: 0.16, type: 'triangle', gain: 0.28, delay: i * 0.1 })),

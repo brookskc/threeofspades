@@ -196,6 +196,20 @@ export class Player {
           && this.ammo[this.tool] < TOOLS[this.tool].mag)
         this._reload();
       if (e.code === 'Space') { this.slideT = 0; this.body.jump(); } // hop out of a slide
+      // Airstrike: a 10-kill streak's payoff. Toggle — press once to enter
+      // targeting (camera detaches to a fixed-altitude overhead view, body
+      // freezes in place but stays fully damageable), press again to back
+      // out with no cost at all, since nothing's been committed yet. Only
+      // confirming a target (see _updatePiloting) actually spends the streak.
+      if (e.code === 'KeyF') {
+        if (this._piloting) {
+          this._piloting = false;
+        } else if ((this._streak ?? 0) >= 10) {
+          this._piloting = true;
+          const eye = this.body.eye();
+          this._pilotPos = new THREE.Vector3(eye.x, SY + 30, eye.z);
+        }
+      }
     });
     addEventListener('keyup', e => {
       this.keys[e.code] = false;
@@ -421,6 +435,11 @@ export class Player {
   // ---------------- per-frame ----------------
   update(dt) {
     if (!this.alive) return;
+    // Short-circuits everything below — no movement, no aiming, no firing,
+    // completely different camera. The body itself never gets touched
+    // here, which is exactly what leaves it standing still and fully
+    // damageable while this runs.
+    if (this._piloting) { this._updatePiloting(dt); return; }
     const b = this.body;
     // Crouch (hold CTRL): trades speed for a steadier aim. Both heights still
     // span two voxel rows, so standing up can never wedge us into a ceiling.
@@ -562,6 +581,40 @@ export class Player {
     }
   }
 
+  // Fixed-altitude overhead pan, camera locked straight down at a fixed
+  // yaw — deliberately NOT the death flycam's full 3D free-roam (that one
+  // reuses look-direction-relative movement and voxel collision, both of
+  // which would just be noise here: this camera never needs to fly under
+  // anything or collide with terrain, it stays high above all of it the
+  // whole time). WASD pans in fixed world-space directions rather than
+  // relative to any yaw, so it never rotates confusingly the way a
+  // yaw-relative scheme would this far removed from a normal first-person
+  // frame of reference.
+  _updatePiloting(dt) {
+    const p = this._pilotPos;
+    const wish = new THREE.Vector3();
+    if (this.keys['KeyW']) wish.z -= 1;
+    if (this.keys['KeyS']) wish.z += 1;
+    if (this.keys['KeyD']) wish.x += 1;
+    if (this.keys['KeyA']) wish.x -= 1;
+    if (wish.lengthSq() > 0) wish.normalize();
+    const speed = 40; // faster than the death flycam's 9 — this is a deliberate
+                       // "scan the whole map quickly" tool, not a leisurely spectate cam
+    p.x = Math.max(0, Math.min(SX, p.x + wish.x * speed * dt));
+    p.z = Math.max(0, Math.min(SZ, p.z + wish.z * speed * dt));
+    this.camera.position.copy(p);
+    this.camera.rotation.set(-Math.PI / 2, 0, 0, 'YXZ'); // straight down
+    // Confirm on LMB's rising edge only, so a held click doesn't fire on
+    // every frame — there's no cooldown/mag system in play here at all,
+    // this is a one-shot commit.
+    const firing = !!this.mouseDown[0];
+    if (firing && !this._pilotFireWas) {
+      this.game.requestAirstrike(this, p.x, p.z);
+      this._piloting = false;
+    }
+    this._pilotFireWas = firing;
+  }
+
   _useTool() {
     const t = TOOLS[this.tool];
     if (t.key === 'spade') { this.swing = 1; return this.game.requestDig(this); }
@@ -589,6 +642,8 @@ export class Player {
     this.body.half.h = 1.75;
     this.swing = 0;
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain — no rampage survives a death
+    this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
+    this._piloting = false; // die mid-airstrike-targeting and the sequence just ends — no explosion, no orphaned camera state
     this.vmRoot.visible = false; // no floating gun while down
     this.resetZoom(); // don't die scoped in — the death camera shouldn't render through a sniper scope
     // Bots and remote players already burst apart on death (see their die()

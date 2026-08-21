@@ -255,6 +255,28 @@
     100% { opacity:0; }
   }
 
+  /* Airstrike targeting: shown while piloting the overhead camera. The
+     camera always looks straight down (see Player#_updatePiloting), so
+     the target is always exactly screen-center — a fixed reticle, not
+     something that has to track a raycast the way a normal crosshair
+     would. Square outline instead of the normal crosshair's dot,
+     deliberately distinct so there's no chance of confusing "I'm in
+     airstrike mode" with ordinary aiming. Flat, no glow/shadow, same rule
+     as everything else in this HUD. */
+  #airstrikeHud { position:fixed; inset:0; pointer-events:none; opacity:0; display:none; }
+  #airstrikeHud.on { opacity:1; display:block; }
+  #airstrikeHud .reticle { position:absolute; left:50%; top:50%; width:36px; height:36px;
+    transform:translate(-50%,-50%); border:2px solid rgba(224,90,74,.9); }
+  #airstrikeHud .label { position:absolute; left:50%; top:calc(50% + 34px);
+    transform:translateX(-50%); font-size:13px; letter-spacing:2px; color:rgba(224,90,74,.9);
+    text-transform:uppercase; white-space:nowrap; }
+  /* Shown whenever the streak is high enough to use, hidden the moment
+     targeting starts (the reticle above takes over as the active-state
+     indicator) — driven by hud.airstrikeStatus, checked once a frame. */
+  #airstrikeReady { display:none; position:absolute; left:50%; bottom:80px;
+    transform:translateX(-50%); font-size:14px; letter-spacing:2px; color:#ffd97a;
+    text-transform:uppercase; }
+
   .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
     border-radius:6px; backdrop-filter:blur(3px); }
   #vitals { left:22px; bottom:22px; min-width:210px; }
@@ -356,6 +378,8 @@
     <div id="crosshair"></div><div id="hitmark"></div>
     <div id="dmgDir"><div class="chevron"></div></div>
     <div id="killcallout"></div>
+    <div id="airstrikeHud"><div class="reticle"></div><div class="label">airstrike — click to confirm</div></div>
+    <div id="airstrikeReady">airstrike ready — [F]</div>
     <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>
