@@ -211,7 +211,7 @@ export class Player {
           this._piloting = true;
           const eye = this.body.eye();
           this._pilotPos = new THREE.Vector3(eye.x, SY + 30, eye.z);
-        } else if ((this._streak ?? 0) >= 5 && !(this._overchargeT > 0) && !(this._overchargeCd > 0)) {
+        } else if ((this._streak ?? 0) >= 5 && !(this._overchargeT > 0) && !this._overchargeUsed) {
           this.game.requestOvercharge(this);
         }
       }
@@ -444,9 +444,11 @@ export class Player {
     // Overcharge activated while still under 10 streak has to keep
     // counting down even after crossing into airstrike-eligible territory
     // and entering piloting mode — it finishes on its own schedule, not
-    // interrupted by what F does next.
-    if (this._overchargeT > 0) { this._overchargeT -= dt; if (this._overchargeT <= 0) { this._overchargeT = 0; this._overchargeCd = 5; } }
-    else if (this._overchargeCd > 0) { this._overchargeCd -= dt; if (this._overchargeCd < 0) this._overchargeCd = 0; }
+    // interrupted by what F does next. One-time per life now, not a
+    // cooldown loop — once it ends there's nothing further to tick down;
+    // _overchargeUsed (set on activation, cleared only on death) is what
+    // permanently blocks a second use for the rest of this life.
+    if (this._overchargeT > 0) { this._overchargeT -= dt; if (this._overchargeT < 0) this._overchargeT = 0; }
     // Short-circuits everything below — no movement, no aiming, no firing,
     // completely different camera. The body itself never gets touched
     // here, which is exactly what leaves it standing still and fully
@@ -655,7 +657,7 @@ export class Player {
     this.swing = 0;
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain — no rampage survives a death
     this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
-    this._overchargeT = 0; this._overchargeCd = 0; // dying cancels an active buff outright — it does not carry into the next life
+    this._overchargeT = 0; this._overchargeUsed = false; // dying cancels an active buff outright and refreshes the one-time-per-life use
     this._piloting = false; // die mid-airstrike-targeting and the sequence just ends — no explosion, no orphaned camera state
     this.vmRoot.visible = false; // no floating gun while down
     this.resetZoom(); // don't die scoped in — the death camera shouldn't render through a sniper scope

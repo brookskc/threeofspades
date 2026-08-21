@@ -759,7 +759,7 @@ export class Bot {
     this.deadT = 0; // corpse tumble starts; the body hides itself when done
     this._mkCount = 0; this._mkT = null; // tracked for consistency even though bots don't get the callout shown
     this._streak = 0; // ditto — bots can't call in an airstrike, but the counter stays correct regardless
-    this._overchargeT = 0; this._overchargeCd = 0; // ditto — bots never activate this, but stays correct regardless
+    this._overchargeT = 0; this._overchargeUsed = false; // ditto — bots never activate this, but stays correct regardless
     this.parts.gun.visible = true; // drop the spade, back to the rifle
     this.parts.spade.visible = false;
     this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);

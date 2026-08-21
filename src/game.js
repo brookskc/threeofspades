@@ -243,7 +243,7 @@ const hud = {
     if (ready) {
       if (p._piloting || p._overchargeT > 0) ready.style.display = 'none';
       else if ((p._streak ?? 0) >= 10) { ready.textContent = 'airstrike ready — [F]'; ready.style.display = 'block'; }
-      else if ((p._streak ?? 0) >= 5 && !(p._overchargeCd > 0)) { ready.textContent = 'overcharge ready — [F]'; ready.style.display = 'block'; }
+      else if ((p._streak ?? 0) >= 5 && !p._overchargeUsed) { ready.textContent = 'overcharge ready — [F]'; ready.style.display = 'block'; }
       else ready.style.display = 'none';
     }
     const overlay = $('airstrikeHud');
@@ -674,7 +674,7 @@ class RemoteProxy {
     this.alive = false;
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain
     this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
-    this._overchargeT = 0; this._overchargeCd = 0; // dying cancels an active buff outright
+    this._overchargeT = 0; this._overchargeUsed = false; // dying cancels an active buff and refreshes the one-time-per-life use
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1558,12 +1558,17 @@ export class Game {
 
   // Host/solo-authoritative, re-validated here for the same reason as
   // above: a guest's claim that it's eligible is never trusted on its own.
-  // Does NOT spend the streak — unlike airstrike, this doesn't consume
-  // anything, it's a toggle you can trigger again the moment the cooldown
-  // clears, as many times as the streak stays alive to support it.
+  // One-time per life, NOT a repeating cooldown toggle — the original
+  // design let anyone above the streak threshold keep reactivating this
+  // roughly every 15s (10s active + 5s cooldown) for the rest of a life,
+  // which amounted to a near-permanent 1.5x/1.5x once someone was already
+  // winning — exactly the runaway-power problem the rest of this streak
+  // system is built to avoid. _overchargeUsed (cleared only on death, not
+  // by anything Airstrike does to _streak) is the actual gate now.
   _activateOvercharge(p) {
-    if ((p._streak ?? 0) < 5 || p._overchargeT > 0 || p._overchargeCd > 0) return;
-    p._overchargeT = 10;
+    if ((p._streak ?? 0) < 5 || p._overchargeT > 0 || p._overchargeUsed) return;
+    p._overchargeT = 30;
+    p._overchargeUsed = true;
     if (p === this.player) sfx.overcharge();
     else if (p.isRemote) this.net.sendTo(p.id, { t: 'e', k: 'overcharge' });
   }
@@ -2362,9 +2367,14 @@ export class Game {
       }
       case 'overcharge':
         // Confirmation from the host that activation succeeded — sets the
-        // SAME duration locally so this client's own countdown/HUD state
-        // matches what the host's authoritative copy is already running.
-        this.player._overchargeT = 10;
+        // SAME duration and used-flag locally so this client's own
+        // countdown/HUD/re-activation-gate state matches what the host's
+        // authoritative copy is already running. Without setting the flag
+        // here too, the keydown handler's own local check (which gates
+        // BEFORE ever sending the request, not just after) would let this
+        // guest keep firing requests the host would silently ignore.
+        this.player._overchargeT = 30;
+        this.player._overchargeUsed = true;
         sfx.overcharge();
         break;
       case 'col': { // host collapsed a structure: replay removal + dust only
@@ -2554,10 +2564,12 @@ export class Game {
     // RemoteProxy has no update(dt) of its own the way Player does — its
     // state rides the network snapshot instead — so its Overcharge timer
     // needs its own tick here specifically, on the host's authoritative
-    // copy, since that's the one damage() actually reads.
+    // copy, since that's the one damage() actually reads. One-time per
+    // life now, so there's nothing to do once the active timer hits zero
+    // — no cooldown state to enter, _overchargeUsed already permanently
+    // blocks reactivation until this proxy's own die() clears it.
     for (const rp of this.remote.values()) {
-      if (rp._overchargeT > 0) { rp._overchargeT -= dt; if (rp._overchargeT <= 0) { rp._overchargeT = 0; rp._overchargeCd = 5; } }
-      else if (rp._overchargeCd > 0) { rp._overchargeCd -= dt; if (rp._overchargeCd < 0) rp._overchargeCd = 0; }
+      if (rp._overchargeT > 0) { rp._overchargeT -= dt; if (rp._overchargeT < 0) rp._overchargeT = 0; }
     }
 
     if (this.player.alive) this.player.update(dt);
