@@ -234,6 +234,27 @@
     width:0; height:0; border-left:13px solid transparent; border-right:13px solid transparent;
     border-top:20px solid rgba(224,90,74,.92); }
 
+  /* Multi-kill callout: bold flat text, no gradient/glow (same rule as
+     everything else in this HUD), color set inline per tier by
+     hud.killCallout (gold for double/triple, the same danger red as the
+     kill hitmark once it's an actual "multi"). Pop-in-hold-fade rather
+     than a straight fade like #msg's ordinary status text — this is meant
+     to read as a bigger moment than a connection warning, not the same
+     kind of message. Positioned above the crosshair/reticle rather than
+     on top of it, so it doesn't obscure aim during whatever fight is
+     presumably still happening. */
+  #killcallout { position:absolute; left:50%; top:30%; transform:translate(-50%,-50%) scale(1);
+    font-size:32px; font-weight:800; letter-spacing:4px; text-transform:uppercase;
+    opacity:0; pointer-events:none; white-space:nowrap; }
+  #killcallout.pop { animation:kcpop .9s ease-out; }
+  @keyframes kcpop {
+    0%   { opacity:0; transform:translate(-50%,-50%) scale(.7); }
+    15%  { opacity:1; transform:translate(-50%,-50%) scale(1.15); }
+    30%  { opacity:1; transform:translate(-50%,-50%) scale(1); }
+    75%  { opacity:1; }
+    100% { opacity:0; }
+  }
+
   .panel { position:absolute; padding:10px 16px; background:rgba(10,14,22,.55);
     border-radius:6px; backdrop-filter:blur(3px); }
   #vitals { left:22px; bottom:22px; min-width:210px; }
@@ -334,6 +355,7 @@
   <div id="hud">
     <div id="crosshair"></div><div id="hitmark"></div>
     <div id="dmgDir"><div class="chevron"></div></div>
+    <div id="killcallout"></div>
     <div id="scopeNotches"><div class="center"></div></div>
     <div class="panel" id="roomcode">ROOM <b>····</b></div>
     <div id="ping"></div>

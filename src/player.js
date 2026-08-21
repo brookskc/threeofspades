@@ -588,6 +588,7 @@ export class Player {
     this.crouched = false;
     this.body.half.h = 1.75;
     this.swing = 0;
+    this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain — no rampage survives a death
     this.vmRoot.visible = false; // no floating gun while down
     this.resetZoom(); // don't die scoped in — the death camera shouldn't render through a sniper scope
     // Bots and remote players already burst apart on death (see their die()

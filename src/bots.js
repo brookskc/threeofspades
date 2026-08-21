@@ -757,6 +757,7 @@ export class Bot {
   die(killer) {
     this.alive = false;
     this.deadT = 0; // corpse tumble starts; the body hides itself when done
+    this._mkCount = 0; this._mkT = null; // tracked for consistency even though bots don't get the callout shown
     this.parts.gun.visible = true; // drop the spade, back to the rifle
     this.parts.spade.visible = false;
     this.game.effects.burst(this.body.eye(), 26, this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);

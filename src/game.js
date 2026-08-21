@@ -183,6 +183,19 @@ class Flag {
 }
 
 // ---------------------------------------------------------------- HUD
+// Shared by hud.killCallout (its trigger) and the client-side 'hit' event
+// handler (its wire receiver) — kept in exactly one place so the
+// tier->text/color/note-count mapping never has to be duplicated on both
+// sides of the network boundary. Colors escalate from this HUD's own
+// gold accent up to the kill hitmark's danger red, rather than a new
+// arbitrary color per tier — double and triple stay gold (a real
+// milestone, not yet a full rampage), multi jumps to red to match the
+// weight of an actual kill hitmark by that point.
+const MULTIKILL = {
+  double: { text: 'DOUBLE KILL', color: '#ffd97a', notes: 2 },
+  triple: { text: 'TRIPLE KILL', color: '#ffd97a', notes: 3 },
+  multi:  { text: 'MULTI KILL',  color: '#e05a4e', notes: 5 },
+};
 const hud = {
   refreshTool(p) {
     const t = TOOLS[p.tool];
@@ -319,6 +332,23 @@ const hud = {
     const c = el.firstElementChild;
     c.style.transition = 'none'; c.style.opacity = 1;
     requestAnimationFrame(() => { c.style.transition = 'opacity 1.5s linear'; c.style.opacity = 0; });
+  },
+  // tier: 'double' | 'triple' | 'multi'. Owns BOTH the sound and the text —
+  // the fanfare replaces the ordinary kill chime entirely rather than
+  // layering under it (see sfx.multiKill's own comment for why), so
+  // whichever call site triggers this is the one place that decides "this
+  // kill gets the escalated treatment instead of the plain one," not two
+  // separate decisions that could disagree with each other.
+  killCallout(tier) {
+    const spec = MULTIKILL[tier];
+    if (!spec) return;
+    sfx.multiKill(spec.notes);
+    const el = $('killcallout');
+    el.textContent = spec.text;
+    el.style.color = spec.color;
+    el.classList.remove('pop');
+    void el.offsetWidth; // force reflow so a chain (double -> triple -> multi) restarts the pop each time
+    el.classList.add('pop');
   },
   respawn(t) {
     $('respawn').style.opacity = t > 0 ? 1 : 0;
@@ -618,6 +648,7 @@ class RemoteProxy {
   }
   die(killer) {
     this.alive = false;
+    this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1130,10 +1161,36 @@ export class Game {
   // already run, not before: killed has to reflect what damage() actually
   // did (which can no-op on spawn protection or an already-dead target),
   // not a guess made before applying it.
+  //
+  // Multi-kill tracking lives here too, not in a separate method — this
+  // is already the one place every lethal hit passes through with the
+  // attacker in hand, so a second chokepoint would just be a second place
+  // for the two to drift out of sync. _mkCount/_mkT are tracked directly
+  // on whatever entity got the kill (Player, RemoteProxy, or Bot) rather
+  // than in some Game-level map — reset to zero on death (see each die()),
+  // so a chain never survives past a life the way it shouldn't. A window
+  // of 5 seconds SINCE THE LAST KILL, not since the first: three kills
+  // 4 seconds apart each still chains into a triple, but 5+ seconds of
+  // nothing breaks it, matching the sliding-window convention this genre
+  // already uses (Halo's multikill medals work the same way).
   _hitFeedback(attacker, killed) {
     if (!attacker) return;
-    if (attacker === this.player) { killed ? sfx.kill() : sfx.hit(); hud.hitmark(killed); }
-    else if (attacker.isRemote) this.net.sendTo(attacker.id, { t: 'e', k: 'hit', kill: killed });
+    let tier = null;
+    if (killed) {
+      const now = this.time;
+      attacker._mkCount = (attacker._mkT != null && now - attacker._mkT <= 5) ? attacker._mkCount + 1 : 1;
+      attacker._mkT = now;
+      if (attacker._mkCount >= 2) {
+        tier = attacker._mkCount >= 4 ? 'multi' : attacker._mkCount === 3 ? 'triple' : 'double';
+      }
+    }
+    if (attacker === this.player) {
+      hud.hitmark(killed); // the crosshair confirmation is unconditional — multi-kill or not, every kill gets it
+      if (tier) hud.killCallout(tier); // replaces the plain chime below, doesn't play alongside it
+      else killed ? sfx.kill() : sfx.hit();
+    } else if (attacker.isRemote) {
+      this.net.sendTo(attacker.id, { t: 'e', k: 'hit', kill: killed, tier });
+    }
   }
 
   // sourcePos is optional and defaults to the attacker's own position —
@@ -2166,7 +2223,11 @@ export class Game {
       case 'msg':
         if (!d.team || d.team === this.player.team) hud.message(d.text, d.color);
         break;
-      case 'hit': d.kill ? sfx.kill() : sfx.hit(); hud.hitmark(d.kill); break;
+      case 'hit':
+        hud.hitmark(d.kill);
+        if (d.tier) hud.killCallout(d.tier); // replaces the plain chime, same rule as the host-side path
+        else d.kill ? sfx.kill() : sfx.hit();
+        break;
       case 'dmgdir': hud.damageDir(this._bearingTo({ x: d.x, z: d.z })); break;
       case 'chat':
         hud.chatMsg({ name: cleanName(d.name), team: d.team === 'blue' ? 'blue' : 'green',

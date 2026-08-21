@@ -86,6 +86,19 @@ export const sfx = {
   // "that one was different," not just a louder version of the same tick.
   kill:      () => { tone({ freq: 1100, dur: 0.1, type: 'sine', gain: 0.24 });
                       tone({ freq: 1650, dur: 0.16, type: 'sine', gain: 0.2, delay: 0.06 }); },
+  // Multi-kill fanfare: an ascending run of N notes, replacing kill()
+  // entirely rather than layering on top of it — both live in the same
+  // sine/1000-1900Hz neighborhood, so playing both for the same kill
+  // would just be mud, not emphasis. N genuinely scales with the chain
+  // (2 for a double, 3 for a triple, capped at 5 even though the callout
+  // text itself caps at "MULTI KILL") so a longer chain keeps sounding
+  // like more happened rather than topping out the moment it's officially
+  // "multi."
+  multiKill: (notes) => {
+    for (let i = 0; i < notes; i++) {
+      tone({ freq: 1000 + i * 220, dur: 0.11, type: 'sine', gain: 0.22, delay: i * 0.07 });
+    }
+  },
   hurt:      () => { tone({ freq: 220, dur: 0.15, type: 'sawtooth', gain: 0.3, slide: -140 }); },
   throw_:    () => burst({ dur: 0.09, freq: 2000, gain: 0.15 }),
   explosion: () => { burst({ dur: 0.9, freq: 500, gain: 1.0 }); tone({ freq: 70, dur: 0.7, type: 'sine', gain: 0.6, slide: -40 }); },
