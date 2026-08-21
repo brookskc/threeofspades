@@ -696,6 +696,7 @@ class RemoteProxy {
     this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
     this._overchargeT = 0; this._overchargeUsed = false; // dying cancels an active buff and refreshes the one-time-per-life use
     this._lastAimDir = null; this._lastAimT = null; // next life's first shot has no aim history to compare against — spawns face an arbitrary direction, not a continuation of whatever they were aiming at when they died
+    this._lastNadeAimDir = null; this._lastNadeAimT = null; // same reasoning, separate baseline for the nade check
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1945,6 +1946,28 @@ export class Game {
         if (gap('nade') < 0.6 || p.nades <= 0) return;
         p._actT.nade = now;
         p.nades--;
+        // Aim-angle plausibility, same mechanism and reasoning as
+        // shooting (see that comment above for the full rationale: rate
+        // cap not absolute-angle cap, deliberately generous threshold,
+        // baseline only advances on an accepted throw). Its own,
+        // separate baseline — _lastNadeAimDir, not _lastAimDir — rather
+        // than sharing state with gunfire: snapping from "aiming a gun
+        // at one target" to "throwing a grenade at a completely
+        // different angle" within the same instant is ordinary,
+        // legitimate play (react to a flank while already in a
+        // firefight), and coupling the two would let an unrelated
+        // gunshot from a moment ago reject a grenade throw now, or vice
+        // versa. Charged (rate-limit timestamp, nade count) BEFORE this
+        // check runs, same as shooting's rate-limit timestamp — a
+        // rejected throw still costs a real grenade, which is what
+        // actually makes repeated angle-probing self-limiting rather
+        // than free.
+        if (p._lastNadeAimDir) {
+          const aimElapsed = Math.max(1 / 60, now - p._lastNadeAimT);
+          if (p._lastNadeAimDir.angleTo(dir) / aimElapsed > MAX_TURN_RATE) return;
+        }
+        p._lastNadeAimDir = dir.clone();
+        p._lastNadeAimT = now;
         this.throwGrenade(p, o, dir, 13);
       }
     }
