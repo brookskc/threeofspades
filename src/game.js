@@ -68,6 +68,18 @@ const MAX_SPEED_SLACK = 3;
 // genuinely clear, unobstructed sightline across the map is legitimate
 // play here, not something to hide from them.
 const INTEREST_CLOSE_R = 8;
+// Aim-angle plausibility: the max implied turn rate between two
+// consecutive ACCEPTED shots (angle changed / time elapsed) before a
+// report gets treated as not humanly plausible. 10*PI rad/s = 1800 deg/s
+// — deliberately generous. Real flick-shot benchmarks put even a fast,
+// deliberate human snap in roughly this range for a brief burst; the
+// target here is catching an unsophisticated aimbot that snaps instantly
+// and REPEATEDLY between visible targets shot after shot, not shaving a
+// human's fastest legitimate flick. A "humanized" aimbot that
+// deliberately paces its turn under this rate is a real limit of this
+// specific check, not something it can catch — see the comment at the
+// actual check below.
+const MAX_TURN_RATE = Math.PI * 10;
 // Bullet drop gravity — see Game#_dropCompensate. Matches the world's own
 // GRAVITY magnitude (entities.js) for internal consistency; each weapon's
 // dropVel is what actually tunes how much a given gun drops, same way the
@@ -683,6 +695,7 @@ class RemoteProxy {
     this._mkCount = 0; this._mkT = null; // dying breaks any multi-kill chain
     this._streak = 0; // and the killstreak entirely, separately from the multi-kill chain above
     this._overchargeT = 0; this._overchargeUsed = false; // dying cancels an active buff and refreshes the one-time-per-life use
+    this._lastAimDir = null; this._lastAimT = null; // next life's first shot has no aim history to compare against — spawns face an arbitrary direction, not a continuation of whatever they were aiming at when they died
     this.game.effects.burst(this.body.eye(), 26,
       this.team === 'blue' ? 0x4a6cd4 : 0x4a9e4a, 6);
     this.game.net.sendTo(this.id, { t: 'e', k: 'died' });
@@ -1894,7 +1907,28 @@ export class Game {
         // GUN_CLASSES members) and the player's own class pass through.
         if (GUN_CLASSES.includes(d.tool) && d.tool !== p.gunClass) return;
         if (!spec?.damage || gap('shoot') < spec.interval * 0.6) return;
+        // Rate-limit timestamp updates here, BEFORE the aim check below —
+        // an implausible-aim rejection still has to cost its slot in the
+        // fire-rate budget. Without this, a rejected attempt would be
+        // free to immediately retry, turning this into a probe for
+        // whatever direction happens to pass rather than an actual gate.
         p._actT.shoot = now;
+        // Aim-angle plausibility: origin was already checked above (must
+        // be near the player's own position) but the DIRECTION itself
+        // had no equivalent limit — it could change instantly, shot to
+        // shot, with no cost. Compare against this player's own most
+        // recently ACCEPTED aim (never an updated-on-rejection value —
+        // that would let a string of individually-plausible steps walk
+        // the baseline anywhere over time, defeating the point). No
+        // baseline yet (first shot of this life) always passes — there's
+        // nothing to compare against, and everyone spawns facing an
+        // arbitrary direction.
+        if (p._lastAimDir) {
+          const aimElapsed = Math.max(1 / 60, now - p._lastAimT);
+          if (p._lastAimDir.angleTo(dir) / aimElapsed > MAX_TURN_RATE) return;
+        }
+        p._lastAimDir = dir.clone();
+        p._lastAimT = now;
         this.fireHitscan(p, o, dir, spec);
       }
       else if (d.k === 'dig') {
