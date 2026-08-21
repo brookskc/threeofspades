@@ -800,6 +800,27 @@ export class Bot {
     this.lastPos.copy(this.body.pos);
     this.deadT = -1;
     resetDeath(this.parts);
+    // The gap this closes: animateDeath sinks the corpse's Y position
+    // (see entities.js) as it decays, and resetDeath only ever clears the
+    // tumble rotation — it never had the new spawn position to reset
+    // position TO, since it only receives `parts`, not this bot's own
+    // body. Without this line, group.position stays wherever the corpse
+    // last sank to (often mid-map, at a contested chokepoint or a KOTH
+    // hill, and at ground level from sinking) for exactly one frame:
+    // this respawn() call sets visible=true immediately, but the group's
+    // position only gets corrected on this bot's OWN next update() call —
+    // which, given respawns are processed in a separate pass AFTER
+    // Game#update already ran every bot's update() this frame (bots.js's
+    // "presentation" section, pg.position.copy(b.pos)), doesn't happen
+    // until next frame. One frame at 60fps is ~16ms — short, but a
+    // sudden full-map-width jump reads as a very noticeable flash, and it
+    // happens on literally every bot respawn, which is constant over a
+    // match. Avatar (remote players/bots as seen by anyone over the
+    // network) never had this problem — its own setAlive() hides the
+    // model until a fresh position sample arrives, a different mechanism
+    // for the same goal. Bots, rendered directly for whoever's hosting or
+    // playing solo, had no equivalent guard until now.
+    this.parts.group.position.copy(this.body.pos);
     this.parts.group.visible = true;
   }
 }
