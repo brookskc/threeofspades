@@ -80,6 +80,13 @@ const INTEREST_CLOSE_R = 8;
 // specific check, not something it can catch — see the comment at the
 // actual check below.
 const MAX_TURN_RATE = Math.PI * 10;
+// Delay between an airstrike being confirmed and the explosion actually
+// landing. Duplicated (not imported) in Player#_updatePiloting's
+// watching-camera timer, since player.js can't import from game.js
+// without a circular dependency (game.js already imports Player from
+// there) — both sides are commented to reference this constant by name
+// so a future retune of one doesn't silently desync from the other.
+const AIRSTRIKE_TELEGRAPH_T = 3;
 // Bullet drop gravity — see Game#_dropCompensate. Matches the world's own
 // GRAVITY magnitude (entities.js) for internal consistency; each weapon's
 // dropVel is what actually tunes how much a given gun drops, same way the
@@ -261,13 +268,20 @@ const hud = {
   streakStatus(p) {
     const ready = $('airstrikeReady');
     if (ready) {
-      if (p._piloting || p._overchargeT > 0) ready.style.display = 'none';
+      if (p._piloting || p._watchT > 0 || p._overchargeT > 0) ready.style.display = 'none';
       else if ((p._streak ?? 0) >= 10) { ready.textContent = 'airstrike ready — [F]'; ready.style.display = 'block'; }
       else if ((p._streak ?? 0) >= 5 && !p._overchargeUsed) { ready.textContent = 'overcharge ready — [F]'; ready.style.display = 'block'; }
       else ready.style.display = 'none';
     }
     const overlay = $('airstrikeHud');
-    if (overlay) overlay.classList.toggle('on', !!p._piloting);
+    if (overlay) {
+      overlay.classList.toggle('on', !!p._piloting || p._watchT > 0);
+      // Same reticle, different label: nothing left to confirm once a
+      // target's locked in, so "click to confirm" would be actively
+      // wrong during the watch phase.
+      const label = overlay.querySelector('.label');
+      if (label) label.textContent = p._piloting ? 'airstrike — click to confirm' : 'airstrike inbound';
+    }
     const active = $('overchargeActive');
     if (active) {
       if (p._overchargeT > 0) { active.textContent = `overcharge — ${Math.ceil(p._overchargeT)}s`; active.style.display = 'block'; }
@@ -1591,7 +1605,7 @@ export class Game {
     const y = this.world.surface(Math.floor(x), Math.floor(z)) + 1;
     if (this.mode === 'host') this.net.broadcast({ t: 'e', k: 'telegraph', x, y, z });
     this._telegraph(x, y, z);
-    (this._pendingStrikes ??= []).push({ pos: new THREE.Vector3(x, y, z), owner: attacker, t: 3 });
+    (this._pendingStrikes ??= []).push({ pos: new THREE.Vector3(x, y, z), owner: attacker, t: AIRSTRIKE_TELEGRAPH_T });
   }
 
   // Host/solo-authoritative, re-validated here for the same reason as
