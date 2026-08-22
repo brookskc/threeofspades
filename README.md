@@ -1,10 +1,10 @@
-# SPADEWORK
+# SPADEFALL
 
 **A voxel arena shooter made with three.js, running entirely in your browser.**
 
 ## ▶ Play now
 
-**[prairielab.net/spadework](https://prairielab.net/spadework/)**. No install, no build, no terminal. Just click.
+**[prairielab.net/spadefall](https://prairielab.net/spadefall/)**. No install, no build, no terminal. Just click.
 
 ![Title screen](docs/title.png)
 
@@ -258,8 +258,8 @@ the authoritative sim from it. The match survives its host.
 Optional; the live demo above is the same code. But if you want a local copy:
 
 ```sh
-git clone https://github.com/brookskc/spadework.git
-cd spadework
+git clone https://github.com/brookskc/spadefall.git
+cd spadefall
 python3 -m http.server 8000   # or: npx serve
 # open http://localhost:8000
 ```
